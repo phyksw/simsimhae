@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="referrer" content="no-referrer" />
+  <title>심심풀이</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#/b/story" id="brand"><img class="brand-mark" src="/logo.svg" alt="" width="32" height="32" /><span id="site-name">심심풀이</span></a>
+      <span class="live-pill" id="live-pill" title="실시간 수집 상태"><span class="dot"></span><span class="txt">실시간</span></span>
+      <form class="search" id="search-form" role="search">
+        <input id="search" type="search" placeholder="제목 검색" autocomplete="off" aria-label="제목 검색" />
+      </form>
+      <div class="top-actions">
+        <button class="icon-btn" id="btn-settings" title="보기 설정" aria-label="보기 설정">⚙</button>
+        <button class="icon-btn" id="btn-admin" title="관리자" aria-label="관리자">👤</button>
+      </div>
+    </div>
+    <nav class="boards" id="boards" aria-label="게시판"></nav>
+  </header>
+
+  <section class="adminbar" id="adminbar" hidden>
+    <div class="adminbar-row">
+      <label class="switch" title="켜면 정해진 간격마다 자동으로 수집하고 화면에 바로 올라와요">
+        <input type="checkbox" id="live-toggle" />
+        <span class="slider"></span>
+        <span class="switch-label">실시간 <b id="live-label">OFF</b></span>
+      </label>
+      <label class="interval">간격
+        <select id="live-interval">
+          <option value="5">5분</option><option value="10">10분</option><option value="15">15분</option>
+          <option value="30">30분</option><option value="60">1시간</option>
+        </select>
+      </label>
+      <button class="btn" id="btn-crawl">지금 수집</button>
+      <span class="muted small" id="crawl-info"></span>
+      <span class="spacer"></span>
+      <button class="btn ghost" id="btn-rules">금지어 관리</button>
+      <button class="btn ghost" id="btn-sources">출처 상태</button>
+      <button class="btn ghost" id="btn-logout">로그아웃</button>
+    </div>
+    <div class="adminbar-row small" id="admin-stats"></div>
+    <div class="source-status" id="source-status" hidden></div>
+  </section>
+
+  <main class="wrap">
+    <div class="list-head">
+      <div class="board-head">
+        <h1 class="board-title" id="board-title">📖 썰·대화</h1>
+      </div>
+      <div class="sorts" id="sorts" role="tablist" aria-label="정렬">
+        <button data-sort="new" role="tab">최신순</button>
+        <button data-sort="hot" role="tab">인기순</button>
+        <button data-sort="shorts" role="tab" title="썰·대화·반응처럼 읽어주기 좋은 글 먼저">쇼츠추천순</button>
+      </div>
+    </div>
+    <div class="stage-filter" id="stage-filter" hidden>
+      <button data-stage="">전체</button>
+      <button data-stage="candidate">후보</button>
+      <button data-stage="script">대본 작성</button>
+      <button data-stage="done">촬영 완료</button>
+    </div>
+    <button class="new-banner" id="new-banner" hidden></button>
+    <!-- 목록 전체를 읽어 주지 않도록 aria-live 는 두지 않고, 개수만 아래 status 로 알린다 -->
+    <ol class="posts" id="posts"></ol>
+    <p class="sr-only" id="list-status" role="status"></p>
+    <div class="list-foot">
+      <button class="btn more" id="btn-more" hidden>더 보기</button>
+      <p class="empty muted" id="empty" hidden></p>
+    </div>
+  </main>
+
+  <footer class="foot muted small">
+    <p>각 글의 저작권은 원작성자와 원 출처에 있어요. 제목을 누르면 미리보기, <b>원문 ↗</b>을 누르면 원래 사이트로 가요.</p>
+  </footer>
+
+  <!-- 본문 보기 -->
+  <div class="overlay" id="reader" hidden>
+    <article class="sheet reader" role="dialog" aria-modal="true" aria-labelledby="reader-title">
+      <header class="reader-head">
+        <div class="reader-meta" id="reader-meta"></div>
+        <h2 id="reader-title"></h2>
+        <div class="reader-actions" id="reader-actions"></div>
+        <button class="icon-btn close" type="button" data-close aria-label="닫기">✕</button>
+      </header>
+      <div class="reader-admin" id="reader-admin" hidden></div>
+      <div class="reader-body" id="reader-body"></div>
+      <section class="reader-comments" id="reader-comments" aria-label="댓글" hidden></section>
+      <footer class="reader-foot" id="reader-foot"></footer>
+    </article>
+  </div>
+
+  <!-- 비밀번호 (잠금 게시판 / 관리자) -->
+  <div class="overlay" id="pw-modal" hidden>
+    <form class="sheet small-sheet" id="pw-form" role="dialog" aria-modal="true" aria-labelledby="pw-title">
+      <h2 id="pw-title"></h2>
+      <p class="muted small" id="pw-desc"></p>
+      <input type="password" id="pw-input" autocomplete="current-password" required />
+      <p class="error small" id="pw-error" hidden></p>
+      <div class="row-end">
+        <button type="button" class="btn ghost" data-close>취소</button>
+        <button type="submit" class="btn primary">확인</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- 보기 설정 -->
+  <div class="overlay" id="settings-modal" hidden>
+    <div class="sheet small-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <h2 id="settings-title">보기 설정</h2>
+      <fieldset class="radio-group">
+        <legend>글 제목을 누르면</legend>
+        <label><input type="radio" name="click" value="preview" /> 여기서 미리보기</label>
+        <label><input type="radio" name="click" value="origin" /> 원문 사이트를 새 탭으로</label>
+      </fieldset>
+      <fieldset class="radio-group">
+        <legend>화면</legend>
+        <label><input type="radio" name="theme" value="auto" /> 시스템 설정 따르기</label>
+        <label><input type="radio" name="theme" value="light" /> 밝게</label>
+        <label><input type="radio" name="theme" value="dark" /> 어둡게</label>
+      </fieldset>
+      <div class="row-end"><button class="btn primary" data-close>닫기</button></div>
+    </div>
+  </div>
+
+  <!-- 금지어 관리 -->
+  <div class="overlay" id="rules-modal" hidden>
+    <form class="sheet" id="rules-form" role="dialog" aria-modal="true" aria-labelledby="rules-title">
+      <h2 id="rules-title">금지어 관리</h2>
+      <p class="muted small">한 줄에 하나씩. 저장하면 지금 있는 글도 모두 다시 판정해요. 기본 규칙은 <code>src/filter-rules.js</code> 에 있어요.</p>
+      <div class="rules-grid">
+        <label>차단할 단어 <span class="muted">(걸러진 글함으로)</span><textarea id="rules-block" rows="10"></textarea></label>
+        <label>므흣 단어 <span class="muted">(잠금 게시판으로)</span><textarea id="rules-adult" rows="10"></textarea></label>
+        <label>예외 단어 <span class="muted">(이 표현은 무시)</span><textarea id="rules-allow" rows="10"></textarea></label>
+      </div>
+      <p class="small" id="rules-result"></p>
+      <div class="row-end">
+        <button type="button" class="btn ghost" data-close>닫기</button>
+        <button type="submit" class="btn primary">저장하고 다시 판정</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

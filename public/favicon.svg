@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- 심심풀이: 심드렁한 눈(반쯤 감김) + 슬쩍 올라간 입꼬리 + 작은 ㅋ 말풍선 -->
+  <g transform="rotate(-8 30 34)">
+    <rect x="3" y="9" width="52" height="52" rx="19" fill="#FFC83D"/>
+    <ellipse cx="13.5" cy="43" rx="5" ry="3.2" fill="#FF8A5B" opacity=".45"/>
+    <ellipse cx="44.5" cy="43" rx="5" ry="3.2" fill="#FF8A5B" opacity=".45"/>
+    <path d="M12 30.5h11M35 30.5h11" stroke="#3B2410" stroke-width="3.6" stroke-linecap="round"/>
+    <path d="M14.5 31a3.2 3.2 0 0 0 6.4 0zM37.5 31a3.2 3.2 0 0 0 6.4 0z" fill="#3B2410"/>
+    <path d="M23 46q6.5 3.2 12-2" fill="none" stroke="#3B2410" stroke-width="3.6" stroke-linecap="round"/>
+  </g>
+  <path d="M53 2.5a9.5 9.5 0 1 1-6.9 16l-3.6 1.4 1.2-3.7A9.5 9.5 0 0 1 53 2.5z" fill="#fff" stroke="#3B2410" stroke-width="2"/>
+  <path d="M49.3 8.3h7.3l-1.1 7.6M50.2 12.1h5.6" fill="none" stroke="#3B2410" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
