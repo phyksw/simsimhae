@@ -295,5 +295,7 @@ export function vibeGuess(post) {
   let s = 30 + (post.source === 'blind' ? 10 : 0);
   for (const [w, p] of VIBE_SIGNALS.story) if (t.includes(w.toLowerCase())) s += p;
   for (const [w, p] of VIBE_SIGNALS.visual) if (t.includes(w.toLowerCase())) s += p;
+  for (const [w, p] of VIBE_SIGNALS.tone || []) if (t.includes(w.toLowerCase())) s += p;
+  for (const [w, p] of VIBE_SIGNALS.warm || []) if (t.includes(w.toLowerCase())) s += p;
   return Math.max(0, Math.min(100, Math.round(s)));
 }
