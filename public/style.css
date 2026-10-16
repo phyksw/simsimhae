@@ -335,3 +335,15 @@ code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-
   .reader-comments { padding: 12px 16px 16px; }
   .cm.best { margin: 0 -8px; padding-left: 8px; padding-right: 8px; }
 }
+
+/* 보기 설정 "출처 표시: 숨기기" */
+.hide-source .src-badge, .hide-source .post-meta .also, .hide-source .reader-meta .src, .hide-source .reader-foot .src { display: none !important; }
+
+/* 댓글: 처음엔 접힌 상태, 버튼으로 펼치기 */
+.cm-toggle {
+  display: block; width: 100%; text-align: left; border: 1px solid var(--line); background: var(--surface-2);
+  border-radius: 10px; padding: 10px 12px; font-size: 15px; font-weight: 700; cursor: pointer; color: var(--text);
+}
+.cm-toggle:hover { border-color: var(--text-3); }
+.cm-toggle[aria-expanded='true'] { margin-bottom: 8px; }
+.cm-note { margin: 0 0 4px; }

@@ -54,6 +54,7 @@ const state = {
   readIds: new Set(store.get('hg.read', [])),
   clickMode: store.get('hg.click', 'preview'),
   theme: store.get('hg.theme', 'auto'),
+  showSource: store.get('hg.showSource', true),
   adminOpen: store.get('hg.adminOpen', true),
 };
 
@@ -123,6 +124,11 @@ function num(n) {
 function badge(sourceId, mini = false) {
   const s = state.sources[sourceId] || { short: sourceId, color: '#64748b', name: sourceId };
   return h('span', { class: `badge${mini ? ' mini' : ''}`, style: { background: s.color }, title: s.name }, s.short);
+}
+
+/** 보기 설정 "출처 표시" 를 끄면 글 옆 사이트 배지·같은 글 배지·미리보기의 사이트 이름을 숨긴다 */
+function applySourceVisibility() {
+  document.documentElement.classList.toggle('hide-source', !state.showSource);
 }
 
 function applyTheme() {
@@ -201,7 +207,7 @@ async function loadMeta() {
 }
 
 function boardName(board) {
-  if (board === 'story') return '📖 썰·대화';
+  if (board === 'story') return '☕ 소소한 이야기';
   if (board === 'pick') return '😆 웃긴 것만';
   if (board === 'all') return '전체';
   if (board === 'adult') return '🔒 므흣';
@@ -227,7 +233,7 @@ function renderBoards() {
       extra.count != null ? h('span', { class: 'count' }, extra.count) : null,
     );
   nav.replaceChildren(...kids(
-    chip('story', '📖 썰·대화', { count: bc.story }),
+    chip('story', '☕ 소소한 이야기', { count: bc.story }),
     chip('pick', '😆 웃긴 것만', { count: bc.pick ?? m.pickCount }),
     chip('all', '전체', { count: total }),
     ...m.sources.map((s) => chip(s.id, s.short, { swatch: s.color, count: s.count, title: s.name + (s.active ? '' : ' (수집 꺼짐)'), cls: s.active ? '' : 'inactive' })),
@@ -298,7 +304,7 @@ function renderAdminBar() {
   const statLink = (label, value, board, title) =>
     h('a', { class: `stat${state.board === board ? ' on' : ''}`, href: `#/b/${board}`, title }, label, h('b', {}, value ?? 0));
   $('#admin-stats').replaceChildren(
-    statLink('📖 썰·대화', m.boardCounts?.story, 'story', '썰·대화 보기'),
+    statLink('☕ 소소한 이야기', m.boardCounts?.story, 'story', '소소한 이야기 보기'),
     statLink('😆 웃긴 것만', m.pickCount, 'pick', '웃긴 것만 보기'),
     statLink('공개', st.public, 'all', '공개된 전체 글 보기'),
     statLink('므흣', st.adult, 'adult', '므흣 잠금 게시판 보기'),
@@ -591,7 +597,7 @@ function renderRow(p) {
   return h(
     'li',
     { class: 'post', dataset: { id: p.id } },
-    h('a', { href: `#/b/${p.source}`, style: { textDecoration: 'none' }, title: `${state.sources[p.source]?.name || p.source} 게시판만 보기` }, badge(p.source)),
+    h('a', { class: 'src-badge', href: `#/b/${p.source}`, style: { textDecoration: 'none' }, title: `${state.sources[p.source]?.name || p.source} 게시판만 보기` }, badge(p.source)),
     main,
     admin ? h('span', { class: `score${p.shortsScore >= 70 ? ' hi' : ''}`, title: '쇼츠 적합도 (키워드·반응·Claude 판정)' }, `🎬${p.shortsScore}`) : null,
   );
@@ -609,8 +615,8 @@ function rowActions(p) {
     if (p.status === 'adult') wrap.append(act('일반 게시판으로', { manual: 'ok' }), act('숨기기', { manual: 'blocked' }, 'danger'));
   }
   if (p.status === 'ok') {
-    wrap.append(p.inStory ? act('📖 썰·대화에서 빼기', { vibe: false }, 'ghost') : act('📖 썰·대화로', { vibe: true }));
-    if (p.manualVibe !== null && p.manualVibe !== undefined) wrap.append(act('썰·대화 자동 판정으로', { vibe: null }, 'ghost'));
+    wrap.append(p.inStory ? act('☕ 소소한 이야기에서 빼기', { vibe: false }, 'ghost') : act('☕ 소소한 이야기로', { vibe: true }));
+    if (p.manualVibe !== null && p.manualVibe !== undefined) wrap.append(act('이야기 자동 판정으로', { vibe: null }, 'ghost'));
   }
   if (p.shorts) {
     for (const [k, v] of Object.entries(STAGES)) wrap.append(act(v, { shorts: { stage: k } }, p.shorts.stage === k ? 'on' : 'ghost'));
@@ -636,10 +642,10 @@ async function adminUpdate(p, patch, rowEl) {
               : '자동 판정으로 되돌렸어요'
         : 'vibe' in patch
           ? patch.vibe === true
-            ? '📖 썰·대화에 넣었어요'
+            ? '☕ 소소한 이야기에 넣었어요'
             : patch.vibe === false
-              ? '📖 썰·대화에서 뺐어요'
-              : '썰·대화 자동 판정으로 되돌렸어요'
+              ? '☕ 소소한 이야기에서 뺐어요'
+              : '소소한 이야기 자동 판정으로 되돌렸어요'
           : patch.shorts === null
             ? '후보에서 뺐어요'
             : `쇼츠 ${STAGES[patch.shorts.stage]}(으)로 표시했어요`;
@@ -699,8 +705,8 @@ async function openReader(p) {
   const src = state.sources[p.source] || {};
   $('#reader-title').textContent = p.title;
   $('#reader-meta').replaceChildren(...kids(
-    badge(p.source),
-    h('span', {}, src.name || p.source),
+    h('span', { class: 'src' }, badge(p.source)),
+    h('span', { class: 'src' }, src.name || p.source),
     h('time', { title: fullTime(p.postedAt || p.firstSeenAt) }, timeAgo(p.postedAt || p.firstSeenAt)),
     p.commentCount != null ? h('span', {}, `댓글 ${num(p.commentCount)}`) : null,
     p.likes != null ? h('span', {}, `추천 ${num(p.likes)}`) : null,
@@ -800,7 +806,7 @@ function renderReader(p, data) {
   ));
   renderComments(p, data);
   $('#reader-foot').replaceChildren(
-    h('span', { class: 'muted' }, `출처: ${src.name || p.source} · 이미지·영상 ${data.mediaCount}개`),
+    h('span', { class: 'muted src' }, `출처: ${src.name || p.source}`),
     h('span', { class: 'reader-foot-actions' },
       h('a', { class: 'btn sm', href: p.url, target: '_blank', rel: 'noopener noreferrer' }, '원문에서 보기 ↗'),
       // 긴 글을 끝까지 읽은 뒤 위로 올라가지 않고 닫을 수 있게
@@ -875,11 +881,27 @@ function renderComments(p, data) {
         }, `댓글 ${list.length - COMMENTS_FIRST}개 더 보기`)
       : null;
   const bestCount = list.filter((c) => c.best).length;
-  box.replaceChildren(...kids(
-    h('div', { class: 'cm-top' }, head, bestCount ? h('span', { class: 'muted small' }, `베스트 ${bestCount}개 먼저`) : null, list.length < total ? h('span', { class: 'muted small' }, `· ${list.length}개 가져옴`) : null),
+  const body = h('div', { class: 'cm-body', id: 'cm-body', hidden: true }, ...kids(
+    bestCount || list.length < total
+      ? h('p', { class: 'muted small cm-note' }, ...kids(bestCount ? `베스트 ${bestCount}개 먼저` : null, list.length < total ? ` · ${list.length}개 가져옴` : null))
+      : null,
     ol,
     more,
   ));
+  const label = (open) => `💬 댓글 ${num(total) ?? 0}개 ${open ? '접기 ▴' : '보기 ▾'}`;
+  const toggle = h('button', {
+    class: 'cm-toggle',
+    type: 'button',
+    'aria-expanded': 'false',
+    'aria-controls': 'cm-body',
+    onclick: (e) => {
+      const open = body.hidden;
+      body.hidden = !open;
+      e.currentTarget.setAttribute('aria-expanded', String(open));
+      e.currentTarget.textContent = label(open);
+    },
+  }, label(false));
+  box.replaceChildren(toggle, body);
 }
 
 /** draft: 다시 그릴 때 살려 둘, 아직 저장하지 않은 메모 */
@@ -1249,6 +1271,7 @@ function bind() {
   // 보기 설정
   $('#btn-settings').addEventListener('click', () => {
     $$('input[name="click"]').forEach((r) => (r.checked = r.value === state.clickMode));
+    $$('input[name="source"]').forEach((r) => (r.checked = (r.value === 'on') === state.showSource));
     $$('input[name="theme"]').forEach((r) => (r.checked = r.value === state.theme));
     openOverlay($('#settings-modal'));
   });
@@ -1256,6 +1279,11 @@ function bind() {
     if (e.target.name === 'click') {
       state.clickMode = e.target.value;
       store.set('hg.click', state.clickMode);
+    }
+    if (e.target.name === 'source') {
+      state.showSource = e.target.value === 'on';
+      store.set('hg.showSource', state.showSource);
+      applySourceVisibility();
     }
     if (e.target.name === 'theme') {
       state.theme = e.target.value;
@@ -1359,6 +1387,7 @@ function bind() {
 
 // ---------- 시작 ----------
 applyTheme();
+applySourceVisibility();
 bind();
 try {
   await loadMeta();

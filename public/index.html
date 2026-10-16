@@ -53,7 +53,7 @@
   <main class="wrap">
     <div class="list-head">
       <div class="board-head">
-        <h1 class="board-title" id="board-title">📖 썰·대화</h1>
+        <h1 class="board-title" id="board-title">☕ 소소한 이야기</h1>
       </div>
       <div class="sorts" id="sorts" role="tablist" aria-label="정렬">
         <button data-sort="new" role="tab">최신순</button>
@@ -76,10 +76,6 @@
       <p class="empty muted" id="empty" hidden></p>
     </div>
   </main>
-
-  <footer class="foot muted small">
-    <p>각 글의 저작권은 원작성자와 원 출처에 있어요. 제목을 누르면 미리보기, <b>원문 ↗</b>을 누르면 원래 사이트로 가요.</p>
-  </footer>
 
   <!-- 본문 보기 -->
   <div class="overlay" id="reader" hidden>
@@ -119,6 +115,11 @@
         <legend>글 제목을 누르면</legend>
         <label><input type="radio" name="click" value="preview" /> 여기서 미리보기</label>
         <label><input type="radio" name="click" value="origin" /> 원문 사이트를 새 탭으로</label>
+      </fieldset>
+      <fieldset class="radio-group">
+        <legend>출처(사이트 이름) 표시</legend>
+        <label><input type="radio" name="source" value="on" /> 보이기</label>
+        <label><input type="radio" name="source" value="off" /> 숨기기</label>
       </fieldset>
       <fieldset class="radio-group">
         <legend>화면</legend>
