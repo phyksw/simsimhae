@@ -1,10 +1,12 @@
 // 수집기: 모든 소스의 목록을 받아 저장소에 반영하고, 키워드 판정 → (켜져 있으면) Claude 검수 → 중복 묶기 → 오래된 글 정리.
+// 로컬(npm start)과 클라우드(SiteDO 알람)가 같은 코드를 쓴다. 예약 방법만 setScheduler 로 바꿔 끼운다.
 import { EventEmitter } from 'node:events';
 import { config } from './config.js';
 import { loadSources } from './sources/index.js';
 import { classify, shortsScore, titleKey } from './filter.js';
 import { classifyPosts } from './ai.js';
 import { forgetCached } from './reader.js';
+import { withRequestScope } from './lib/http.js';
 import * as store from './store.js';
 
 const DUP_WINDOW_MS = 7 * 864e5;
@@ -101,16 +103,28 @@ export function rescoreAll() {
   }
 }
 
-async function crawlSource(src, now) {
+/**
+ * 출처 하나의 목록을 받아 반영한다.
+ * 목록 요청은 같은 사이트 대기열에서 방문자 미리보기보다 먼저 나가고(priority 'crawl'),
+ * signal 이 끊기면(출처별 시간 예산) 보내던 요청을 끊고 그때까지 받은 목록만 반영한다.
+ * @param {any} src
+ * @param {string} now
+ * @param {AbortSignal} [signal]
+ */
+async function crawlSource(src, now, signal) {
   const t0 = Date.now();
   const items = [];
   const errors = [];
   for (let page = 1; page <= config.pagesPerSource; page++) {
+    if (signal?.aborted) {
+      errors.push(`p${page}: 시간 초과`);
+      break;
+    }
     try {
-      items.push(...(await src.list(page)));
+      items.push(...(await withRequestScope({ priority: 'crawl', signal }, () => src.list(page))));
     } catch (e) {
-      errors.push(`p${page}: ${e.status ? `HTTP ${e.status}` : e.message}`);
-      if (page === 1) break;
+      errors.push(`p${page}: ${signal?.aborted ? '시간 초과' : e.status ? `HTTP ${e.status}` : e.message}`);
+      if (page === 1 || signal?.aborted) break;
     }
   }
   let added = 0;
@@ -372,9 +386,11 @@ export function crawlAll() {
     const t0 = Date.now();
     const now = new Date().toISOString();
     const sources = await activeSources();
+    // 출처마다 시간 예산: 느린 출처 하나가 수집 전체(알람·옮기기·다음 수집)를 붙잡지 않게
+    const budget = config.crawlSourceBudgetMs;
     const freshLists = await Promise.all(
       sources.map((s) =>
-        crawlSource(s, now).catch((e) => {
+        crawlSource(s, now, budget > 0 ? AbortSignal.timeout(budget) : undefined).catch((e) => {
           store.setSourceState(s.id, { lastRunAt: now, ok: false, error: e.message });
           return [];
         }),
@@ -422,41 +438,70 @@ export function crawlAll() {
 }
 
 // ---- 실시간(자동 수집) 스케줄러: 관리자 화면의 ON/OFF 버튼으로 켜고 끈다 ----
+// 예약 방법은 바꿔 끼울 수 있다: 로컬은 이 프로세스의 setTimeout, 클라우드는 Durable Object 알람(worker/site.js 가 setScheduler).
+// 스케줄러 모양: { arm(ms|null) — ms 뒤에 runScheduled() 가 불리게(없으면 취소), nextRunAt(): ISO|null, pending?(): 곧 돌 수집이 있는지 }
+
 let timer = null;
-let nextRunAt = null;
+let timerAt = null;
+const timerScheduler = {
+  arm(ms) {
+    clearTimeout(timer);
+    timer = null;
+    timerAt = null;
+    if (ms == null) return;
+    timerAt = new Date(Date.now() + ms).toISOString();
+    timer = setTimeout(() => {
+      timer = null;
+      timerAt = null;
+      runScheduled();
+    }, ms);
+  },
+  nextRunAt: () => timerAt,
+};
+let scheduler = timerScheduler;
+
+/** 예약 방법을 바꾼다 (클라우드: DO 알람). null 이면 기본(setTimeout)으로. */
+export function setScheduler(s) {
+  if (scheduler === timerScheduler) timerScheduler.arm(null);
+  scheduler = s || timerScheduler;
+}
+
+/**
+ * 클라우드에 관리자 비밀번호(Worker 비밀 ADMIN_PASSWORD)가 없으면 자동 수집을 켜지 않는다.
+ * 관리자 화면에 들어갈 수 없어 끌 방법이 없기 때문이다 (비밀을 넣으면 다시 켜진다). 로컬은 늘 비밀번호가 있다.
+ */
+export function autoCrawlBlocked() {
+  return !!config.secretsMissing?.includes('ADMIN_PASSWORD');
+}
 
 export function liveState() {
   const s = store.getSettings();
   return {
-    live: s.live ?? config.crawlIntervalMin > 0,
+    live: !autoCrawlBlocked() && (s.live ?? config.crawlIntervalMin > 0),
     intervalMin: s.intervalMin || config.crawlIntervalMin || 15,
-    running: isRunning(),
-    nextRunAt,
+    // 클라우드는 '지금 수집'을 알람으로 넘기므로, 알람이 아직 시작되지 않았어도 수집 중으로 보인다
+    running: isRunning() || !!scheduler.pending?.(),
+    nextRunAt: scheduler.nextRunAt() ?? null,
     lastCrawlAt: store.getDb().lastCrawlAt,
   };
 }
 
-async function tick() {
-  timer = null;
-  nextRunAt = null;
+/** 예약된 수집 1회 (로컬: 타이머, 클라우드: DO 알람이 부른다). 실패해도 다음 수집을 다시 예약한다. */
+export async function runScheduled() {
   try {
-    await crawlAll(); // 시작·끝 이벤트는 crawlAll 이 보낸다
+    return await crawlAll(); // 시작·끝 이벤트는 crawlAll 이 보낸다
   } catch (e) {
     console.error(`[crawl] 실패: ${e.stack || e.message}`);
+    return null;
+  } finally {
+    schedule();
   }
-  schedule();
 }
 
-function schedule(delayMs) {
-  clearTimeout(timer);
-  timer = null;
-  nextRunAt = null;
+/** 실시간이 켜져 있으면 delayMs(기본: 간격) 뒤로 다음 수집을 예약하고, 꺼져 있으면 예약을 지운다 */
+export function schedule(delayMs) {
   const st = liveState();
-  if (st.live) {
-    const ms = delayMs ?? st.intervalMin * 60e3;
-    nextRunAt = new Date(Date.now() + ms).toISOString();
-    timer = setTimeout(tick, ms);
-  }
+  scheduler.arm(st.live ? (delayMs ?? st.intervalMin * 60e3) : null);
   events.emit('state', liveState());
 }
 
@@ -481,9 +526,7 @@ export function setLive({ live, intervalMin }) {
 
 /** 관리자: 지금 수집 (실시간 꺼져 있어도 동작) */
 export async function crawlNow() {
-  clearTimeout(timer);
-  timer = null;
-  nextRunAt = null;
+  scheduler.arm(null);
   try {
     return await crawlAll(); // 이미 돌고 있으면 같은 작업을 기다릴 뿐 이벤트를 또 보내지 않는다
   } finally {

@@ -170,6 +170,21 @@ test('오류 응답은 JSON 이고 스택·경로가 없다', async () => {
   assert.ok(!/at |node_modules|\\|SyntaxError/.test(r.text), r.text);
 });
 
+test('공용 API(src/api.js)를 쓰는 로컬 서버: mode 없음·비밀 파일·공개 사이트 상태는 관리자에게, 클라우드 전용 경로(옮기기)는 404', async () => {
+  const anon = await api('/api/meta');
+  assert.ok(!('mode' in anon.json), '로컬 서버는 mode 를 보내지 않는다 (화면이 SSE 를 쓴다)');
+  const adm = await api('/api/meta', { headers: adminH() });
+  assert.ok(adm.json.secretsFile.endsWith('secrets.json'));
+  assert.equal(typeof adm.json.publish?.enabled, 'boolean');
+  const imp = await api('/api/admin/import', { headers: adminH(), body: { posts: [] } });
+  assert.equal(imp.status, 404);
+  assert.deepEqual(imp.json, { error: 'not found' });
+  // 관리자 POST 는 JSON 만, 관리자 아니면 401 (순서도 예전과 같게)
+  assert.equal((await api('/api/admin/live', { headers: { ...adminH(), 'content-type': 'text/plain' }, body: 'x' })).status, 415);
+  assert.equal((await api('/api/admin/live', { body: {} })).status, 401);
+  assert.equal((await api('/api/admin/posts/%E0%A4%A', { headers: adminH(), body: {} })).status, 400);
+});
+
 test('중복 묶음: 대표 글이 안 보이면 공개 사본이 전체 게시판에 대신 나온다', async () => {
   const all = await api('/api/posts?board=all&size=100');
   const got = ids(all);

@@ -1,3 +1,6 @@
+> **지금은 쓰지 않는 예전 구조입니다.** Workers Paid 로 바꾸면서 수집·관리자까지 Cloudflare 에서 돈다 ([`CLOUD.md`](./CLOUD.md), [`README.md`](./README.md)).
+> Worker 는 더 이상 아래 업로드 API(`/api/sync/*`)와 D1 을 쓰지 않는다. 로컬 `src/publish.js` 만 이 규약을 그대로 말한다 (기록용).
+
 # 공개 사이트(Cloudflare Worker) ↔ 내 컴퓨터(로컬 서버) 연동 규약
 
 구성 (무료 플랜):

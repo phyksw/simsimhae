@@ -1,9 +1,10 @@
-// JSON 파일 저장소. 글 수천 개 규모라 메모리에 올려두고, 바뀌면 잠시 뒤 원자적으로(임시 파일 → rename) 저장한다.
-import { existsSync, readFileSync, renameSync, writeFileSync, copyFileSync } from 'node:fs';
-import path from 'node:path';
-import { DATA_DIR, config } from './config.js';
-
-const FILE = path.join(DATA_DIR, 'posts.json');
+// 글 저장소. 글 수천 개 규모라 메모리에 올려두고, 바뀐 것을 저장소 백엔드에 쓴다.
+// - 로컬(Node): data/posts.json 한 파일 (src/platform/node.js). 바뀌면 잠시 뒤 원자적으로(임시 파일 → rename) 통째로 저장.
+// - 클라우드: Durable Object SQLite (worker/storage.js). 글 하나가 행 하나라 바뀐 글만 쓰고, 요청·알람이 끝날 때 flush() 한다.
+// 백엔드 모양: { load(): db|null, save(db, changes), autosave?: boolean }
+//   changes = { all: boolean, meta: boolean, posts: string[](바뀐 글 id), deleted: string[](지운 글 id) }
+import * as platform from '#platform';
+import { config } from './config.js';
 
 /**
  * @typedef {{
@@ -28,37 +29,68 @@ const FILE = path.join(DATA_DIR, 'posts.json');
  * settings: 관리자 화면에서 바꾸는 실행 설정 (live = 실시간 자동 수집 ON/OFF, intervalMin = 수집 간격)
  * @type {{posts: Record<string, Post>, sources: Record<string, any>, lastCrawlAt: string|null, settings: {live?: boolean, intervalMin?: number}}}
  */
-let db = { posts: {}, sources: {}, lastCrawlAt: null, settings: {} };
+let db = emptyDb();
 let saveTimer = null;
+/** 저장소 백엔드 (없으면 메모리에만) */
+let backend = platform.storeBackend();
+const dirty = { all: false, meta: false, posts: new Set(), deleted: new Set() };
+
+function emptyDb() {
+  return { posts: {}, sources: {}, lastCrawlAt: null, settings: {} };
+}
+function normalize(j) {
+  if (!j || typeof j !== 'object') return emptyDb();
+  return {
+    posts: j.posts && typeof j.posts === 'object' ? j.posts : {},
+    sources: j.sources && typeof j.sources === 'object' ? j.sources : {},
+    lastCrawlAt: j.lastCrawlAt || null,
+    settings: j.settings && typeof j.settings === 'object' ? j.settings : {},
+  };
+}
+function clearDirty() {
+  dirty.all = false;
+  dirty.meta = false;
+  dirty.posts.clear();
+  dirty.deleted.clear();
+}
+const isDirty = () => dirty.all || dirty.meta || dirty.posts.size > 0 || dirty.deleted.size > 0;
+
+/** 저장소 백엔드를 바꾼다 (클라우드: SiteDO). 메모리의 글은 그대로 두니, 이어서 load() 를 부른다. */
+export function setBackend(b) {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  backend = b || null;
+  clearDirty();
+}
 
 export function load() {
-  if (existsSync(FILE)) {
-    try {
-      const j = JSON.parse(readFileSync(FILE, 'utf8'));
-      db = { posts: j.posts || {}, sources: j.sources || {}, lastCrawlAt: j.lastCrawlAt || null, settings: j.settings || {} };
-    } catch (e) {
-      // 깨진 파일은 보존하고 새로 시작
-      const bad = `${FILE}.broken-${Date.now()}`;
-      try {
-        copyFileSync(FILE, bad);
-      } catch {}
-      console.error(`[store] posts.json 읽기 실패 (${e.message}) → ${bad} 로 보관하고 새로 시작`);
-    }
-  }
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  db = normalize(backend?.load());
+  clearDirty();
   return db;
 }
 
+/** 지금 바로 저장 */
 export function saveNow() {
   clearTimeout(saveTimer);
   saveTimer = null;
-  const tmp = `${FILE}.tmp`;
-  writeFileSync(tmp, JSON.stringify(db));
-  renameSync(tmp, FILE);
+  if (backend) {
+    backend.save(db, { all: dirty.all, meta: dirty.meta, posts: [...dirty.posts], deleted: [...dirty.deleted] });
+  }
+  clearDirty();
 }
 
+/** 밀린 변경이 있을 때만 저장 (클라우드: 요청·알람이 끝날 때마다) */
+export function flush() {
+  if (isDirty()) saveNow();
+}
+
+/** 잠시 뒤 저장. 백엔드가 스스로 미루지 않으면(autosave:false) 표시만 해 두고 flush() 를 기다린다. */
 export function scheduleSave(ms = 1500) {
-  if (saveTimer) return;
+  if (saveTimer || !backend || backend.autosave === false) return;
   saveTimer = setTimeout(() => {
+    saveTimer = null;
     try {
       saveNow();
     } catch (e) {
@@ -68,22 +100,27 @@ export function scheduleSave(ms = 1500) {
 }
 
 export const getDb = () => db;
-export const getPost = (id) => db.posts[id] || null;
+export const getPost = (id) => (Object.hasOwn(db.posts, id) ? db.posts[id] : null);
 export const allPosts = () => Object.values(db.posts);
 
 export function upsertPost(p) {
   db.posts[p.id] = p;
+  dirty.posts.add(p.id);
+  dirty.deleted.delete(p.id);
   scheduleSave();
   return p;
 }
 
 export function deletePost(id) {
   delete db.posts[id];
+  dirty.posts.delete(id);
+  dirty.deleted.add(id);
   scheduleSave();
 }
 
 export function setSourceState(id, state) {
   db.sources[id] = { ...(db.sources[id] || {}), ...state };
+  dirty.meta = true;
   scheduleSave();
 }
 
@@ -91,13 +128,23 @@ export const getSettings = () => db.settings;
 
 export function updateSettings(patch) {
   db.settings = { ...db.settings, ...patch };
+  dirty.meta = true;
   saveNow();
   return db.settings;
 }
 
 export function setLastCrawl(at) {
   db.lastCrawlAt = at;
+  dirty.meta = true;
   scheduleSave();
+}
+
+/** 상태를 통째로 바꾸고 바로 저장한다 (클라우드로 옮기기: /api/admin/import) */
+export function replaceAll(next) {
+  db = normalize(next);
+  dirty.all = true;
+  saveNow();
+  return db;
 }
 
 /** 최종 상태 계산: 관리자 지정 > (Claude 판정 ∨ 키워드 판정 중 더 엄격한 쪽) */
@@ -162,41 +209,10 @@ export function onePerGroup(visible) {
   return visible.filter((p) => keep.has(p));
 }
 
-// ---------- 종료 시 저장 ----------
-process.on('exit', () => {
-  if (saveTimer) {
-    try {
-      saveNow();
-    } catch (e) {
-      console.error(`[store] 종료 저장 실패: ${e.message}`);
-    }
-  }
+// ---------- 종료 시 저장 (로컬: 'exit'·Ctrl+C·SIGTERM. 클라우드에는 없음) ----------
+platform.onExit(() => {
+  if (saveTimer) saveNow();
 });
 
-// 'exit' 이벤트는 처리기 없는 SIGINT(Ctrl+C)/SIGTERM 종료 때는 발생하지 않으므로, 신호를 받으면 밀린 변경을 저장하고 끝낸다.
-// (Windows 의 작업 관리자·TerminateProcess 같은 강제 종료는 어떤 처리기도 실행되지 않는다)
-let signalsInstalled = false;
-export function saveOnSignals() {
-  if (signalsInstalled) return;
-  signalsInstalled = true;
-  let shuttingDown = false;
-  const onSignal = (sig) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    try {
-      if (saveTimer) saveNow();
-    } catch (e) {
-      console.error(`[store] 종료 저장 실패 (${sig}): ${e.message}`);
-    }
-    process.exit(0);
-  };
-  // SIGINT = Ctrl+C, SIGTERM = kill·서비스 관리자, SIGBREAK = Windows Ctrl+Break, SIGHUP = Windows 콘솔 창 닫기
-  // (다른 OS 의 SIGHUP 은 nohup 실행을 깨지 않도록 건드리지 않는다)
-  const sigs = ['SIGINT', 'SIGTERM', ...(process.platform === 'win32' ? ['SIGBREAK', 'SIGHUP'] : [])];
-  for (const sig of sigs) {
-    try {
-      process.on(sig, () => onSignal(sig));
-    } catch {}
-  }
-}
-saveOnSignals();
+/** 예전 이름 (scripts 호환). 신호 처리기는 모듈을 불러올 때 이미 걸린다. */
+export function saveOnSignals() {}

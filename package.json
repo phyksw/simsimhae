@@ -4,13 +4,22 @@
   "private": true,
   "description": "선별·검열된 유머 게시물 모음 사이트 (여러 커뮤니티 유머/베스트 게시판 수집)",
   "type": "module",
+  "imports": {
+    "#platform": {
+      "workerd": "./src/platform/cloud.js",
+      "worker": "./src/platform/cloud.js",
+      "node": "./src/platform/node.js",
+      "default": "./src/platform/cloud.js"
+    }
+  },
   "scripts": {
     "start": "node src/server.js",
     "crawl": "node scripts/crawl-once.js",
     "test:source": "node scripts/test-source.js",
     "test": "node --test test/*.test.js",
     "worker:dev": "wrangler dev --local",
-    "worker:deploy": "wrangler deploy"
+    "worker:deploy": "wrangler deploy",
+    "cloud:push": "node scripts/push-to-cloud.js"
   },
   "engines": {
     "node": ">=20"

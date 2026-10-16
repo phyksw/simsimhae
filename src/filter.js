@@ -1,10 +1,9 @@
 // 키워드 기반 검열 + 쇼츠 적합도 점수. 즉시·무료로 돌아가는 1차 판정이고, Claude 검수(ai.js)가 켜져 있으면 그 결과와 합쳐진다.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
+// 관리자 금지어는 저장소 백엔드에 둔다: 로컬 = data/custom-rules.json (src/platform/node.js), 클라우드 = DO 저장소 (setRulesBackend).
+import { createHash } from 'node:crypto';
+import * as platform from '#platform';
 import { RULES, CATEGORY_RULES, CATEGORY_EXACT, SHORTS_SIGNALS, SOURCE_BIAS, VIBE_SIGNALS } from './filter-rules.js';
-import { DATA_DIR } from './config.js';
 
-const CUSTOM_FILE = path.join(DATA_DIR, 'custom-rules.json');
 const WEIGHT = { strong: 2, weak: 1, soft: 0.5 };
 const CATEGORIES = Object.keys(RULES);
 /** 본문 점수 기준점 기본값: 서로 다른 strong 단어 2개 */
@@ -22,20 +21,22 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 /** 관리자가 추가한 규칙: { block: [...], adult: [...], allow: [...] } */
 let custom = { block: [], adult: [], allow: [] };
 let compiled = null;
+/** 금지어 저장소 { load(): rules|null, save(rules) } (없으면 메모리에만) */
+let rulesStore = platform.rulesBackend();
+
+/** 금지어 저장소를 바꾸고 거기서 다시 읽는다 (클라우드: SiteDO) */
+export function setRulesBackend(b) {
+  rulesStore = b || null;
+  return loadCustomRules();
+}
 
 export function loadCustomRules() {
-  if (existsSync(CUSTOM_FILE)) {
-    try {
-      const j = JSON.parse(readFileSync(CUSTOM_FILE, 'utf8'));
-      custom = {
-        block: Array.isArray(j.block) ? j.block : [],
-        adult: Array.isArray(j.adult) ? j.adult : [],
-        allow: Array.isArray(j.allow) ? j.allow : [],
-      };
-    } catch (e) {
-      console.warn(`[filter] custom-rules.json 읽기 실패: ${e.message}`);
-    }
-  }
+  const j = rulesStore?.load();
+  custom = {
+    block: Array.isArray(j?.block) ? j.block : [],
+    adult: Array.isArray(j?.adult) ? j.adult : [],
+    allow: Array.isArray(j?.allow) ? j.allow : [],
+  };
   compiled = null;
   return custom;
 }
@@ -47,8 +48,8 @@ export function getCustomRules() {
 export function saveCustomRules(next) {
   const clean = (arr) =>
     [...new Set((Array.isArray(arr) ? arr : []).map((s) => String(s).trim().toLowerCase()).filter((s) => s.length >= 1 && s.length <= 40))].slice(0, 500);
-  custom = { block: clean(next.block), adult: clean(next.adult), allow: clean(next.allow) };
-  writeFileSync(CUSTOM_FILE, JSON.stringify(custom, null, 2));
+  custom = { block: clean(next?.block), adult: clean(next?.adult), allow: clean(next?.allow) };
+  rulesStore?.save(custom);
   compiled = null;
   return custom;
 }
@@ -284,6 +285,25 @@ export function titleKey(title) {
 }
 
 loadCustomRules();
+
+/**
+ * 판정 규칙의 지문: 기본 규칙·판정 방식·관리자 규칙·소스 엄격도가 바뀌면 달라진다 (다르면 저장된 글을 다시 판정한다).
+ * 로컬은 판정 파일(filter.js·filter-rules.js) 내용 그대로, 클라우드는 파일이 없어 규칙 데이터와 판정 함수의 코드로 만든다.
+ * @param {Array<{id: string, strictness?: string}>} srcs
+ */
+export function rulesFingerprint(srcs) {
+  const h = createHash('sha1');
+  const parts = platform.filterCodeParts();
+  if (parts) for (const b of parts) h.update(b);
+  else {
+    const rx = (k, v) => (v instanceof RegExp ? `/${v.source}/${v.flags}` : v);
+    h.update(JSON.stringify([RULES, CATEGORY_RULES, CATEGORY_EXACT], rx));
+    for (const fn of [fold, compact, normalize, term, compile, stripExceptions, scoreCategory, classify]) h.update(String(fn));
+  }
+  h.update(JSON.stringify(custom));
+  h.update(JSON.stringify(srcs.map((s) => [s.id, s.strictness || 'normal'])));
+  return h.digest('hex').slice(0, 16);
+}
 
 /**
  * "썰·대화" 분위기 점수 0~100 (Claude 판정이 없을 때 쓰는 제목 기반 어림값).

@@ -1,4 +1,4 @@
-// 응답 도우미: JSON 응답, 보안 헤더, 크기 제한이 있는 요청 본문 읽기.
+// 응답 도우미: JSON 응답, 보안 헤더, 크기 제한이 있는 요청 본문 읽기 (Worker 진입점·SiteDO·이미지 프록시가 같이 쓴다).
 
 /** 로컬 서버(src/server.js)와 같은 페이지 CSP */
 export const PAGE_CSP = [
@@ -51,9 +51,6 @@ export function withSecurityHeaders(res) {
   }
 }
 
-/** Content-Type 이 application/json 인지 (다른 사이트의 폼 POST 를 막는다) */
-export const isJsonRequest = (request) => /^application\/json\s*(;|$)/i.test(request.headers.get('content-type') || '');
-
 /**
  * 요청 본문을 글자로 읽는다. limit 바이트를 넘으면 그 자리에서 끊고 413.
  * @param {Request} request
@@ -78,14 +75,4 @@ export async function readBody(request, limit) {
     out += decoder.decode(value, { stream: true });
   }
   return out + decoder.decode();
-}
-
-/** 본문을 JSON 으로 읽는다. 형식이 틀리면 400. */
-export async function readJson(request, limit) {
-  const text = await readBody(request, limit);
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new HttpError(400, '잘못된 요청이에요');
-  }
 }

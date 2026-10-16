@@ -62,11 +62,22 @@ const STAGES = { candidate: '후보', script: '대본 작성', done: '촬영 완
 const VERDICT_LABEL = { ok: '정상', politics: '정치', hate: '혐오', dark: '사건사고', adult: '므흣', not_humor: '유머 아님' };
 
 /**
- * 공개 사이트(Cloudflare Worker)에서 열렸는지 (/api/meta 의 mode 가 "public").
- * 공개 사이트는 읽기 전용이라 관리자 기능·실시간 연결(SSE)이 없고, 2분마다 메타를 다시 받아 새 글을 알린다.
+ * 어디서 열렸는지 (/api/meta 의 mode).
+ * - "public": 공개 사이트(읽기 전용 Worker). 관리자 기능·실시간 연결(SSE)이 없고, 2분마다 메타를 다시 받아 새 글을 알린다.
+ * - "cloud": 수집·관리자까지 Cloudflare 에서 도는 사이트(worker/CLOUD.md). 관리자 기능은 그대로, SSE 대신
+ *   관리자면 30초·방문자면 2분마다 메타를 다시 받는다. 공개 사이트 업로드 표시는 없다.
+ * - 그 밖(없음·"local"): 내 컴퓨터 서버. SSE 로 실시간 알림.
  */
 const isPublic = () => state.meta?.mode === 'public';
+const isCloud = () => state.meta?.mode === 'cloud';
+/** SSE 대신 /api/meta 를 주기적으로 다시 받는 모드 */
+const usesPolling = () => isPublic() || isCloud();
 const PUBLIC_POLL_MS = 2 * 60e3;
+const CLOUD_ADMIN_POLL_MS = 30e3;
+const CRAWL_POLL_MS = 3e3; // 클라우드에서 '지금 수집'을 누른 뒤 끝날 때까지
+const CRAWL_FOLLOW_MAX = 200; // 3초 × 200 = 10분. 넘으면 평소 간격으로 (끝나면 그때 보인다)
+/** 클라우드: '지금 수집'을 누른 뒤 끝날 때까지 따라가는 중 { checks, sawRunning, fromAt } */
+let crawlFollow = null;
 const httpUrl = (u) => (typeof u === 'string' && /^https?:\/\//i.test(u) ? u : null);
 
 // ---------- 공용 ----------
@@ -203,6 +214,7 @@ async function loadMeta() {
   renderLive(state.meta.live);
   renderBoards();
   renderAdminBar();
+  renderSorts(); // 로그인/로그아웃하면 관리자 전용 정렬이 보이거나 숨는다
   followPublish();
 }
 
@@ -261,8 +273,8 @@ function renderSorts() {
 
 function renderLive(live) {
   const pill = $('#live-pill');
-  if (isPublic()) {
-    // 공개 사이트: 수집 상태 대신 마지막 갱신 시각만 중립적으로 ("5분 전 갱신")
+  if (isPublic() || (isCloud() && !state.meta?.admin)) {
+    // 방문자(공개 사이트, 클라우드의 방문자): 수집 상태 대신 마지막 갱신 시각만 중립적으로 ("5분 전 갱신")
     const at = live?.lastCrawlAt;
     pill.hidden = !at;
     pill.classList.add('public');
@@ -272,9 +284,11 @@ function renderLive(live) {
     return;
   }
   pill.hidden = false;
+  pill.classList.remove('public'); // 클라우드에서 방문자 → 관리자로 로그인한 경우
+  const running = !!live?.running || !!crawlFollow;
   pill.classList.toggle('on', !!live?.live);
-  pill.classList.toggle('busy', !!live?.running);
-  pill.querySelector('.txt').textContent = live?.running ? '수집 중' : live?.live ? '실시간' : '일시정지';
+  pill.classList.toggle('busy', running);
+  pill.querySelector('.txt').textContent = running ? '수집 중' : live?.live ? '실시간' : '일시정지';
   pill.title = `${live?.live ? '실시간 수집 켜짐' : '실시간 수집 꺼짐'}${live?.lastCrawlAt ? ` · 마지막 수집 ${fullTime(live.lastCrawlAt)}` : ''}`;
 }
 
@@ -291,8 +305,9 @@ function renderAdminBar() {
   const sel = $('#live-interval');
   if (lv.intervalMin && ![...sel.options].some((o) => Number(o.value) === lv.intervalMin)) sel.append(h('option', { value: lv.intervalMin }, `${lv.intervalMin}분`));
   sel.value = String(lv.intervalMin || 15);
-  $('#btn-crawl').disabled = !!lv.running;
-  $('#btn-crawl').textContent = lv.running ? '수집 중…' : '지금 수집';
+  const running = !!lv.running || !!crawlFollow; // 클라우드: 누른 뒤 서버가 수집을 시작했다고 알리기 전에도
+  $('#btn-crawl').disabled = running;
+  $('#btn-crawl').textContent = running ? '수집 중…' : '지금 수집';
   const info = [];
   if (lv.lastCrawlAt) info.push(`마지막 ${timeAgo(lv.lastCrawlAt)}`);
   if (lv.live && lv.nextRunAt) info.push(`다음 ${new Date(lv.nextRunAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}`);
@@ -323,7 +338,9 @@ function renderAdminBar() {
               ? ai.lastError
                 ? `Claude 검수 오류: ${ai.lastError.message}`
                 : `Claude 검수 켜짐 (${ai.model}) — 새 글은 수집 직후 자동으로 판정해요`
-              : 'Claude 자동 검수는 꺼져 있어요. .env 에 ANTHROPIC_API_KEY 를 넣고 서버를 다시 켜면 새 글도 자동으로 판정해요. (지금 있는 글은 대화에서 Claude 가 직접 판정했어요)',
+              : isCloud()
+                ? 'Claude 자동 검수는 꺼져 있어요. Worker 비밀 ANTHROPIC_API_KEY 를 넣으면 새 글도 수집 직후 자동으로 판정해요. 지금은 키워드 필터로만 걸러요.'
+                : 'Claude 자동 검수는 꺼져 있어요. .env 에 ANTHROPIC_API_KEY 를 넣고 서버를 다시 켜면 새 글도 자동으로 판정해요. (지금 있는 글은 대화에서 Claude 가 직접 판정했어요)',
             7000,
           ),
       },
@@ -378,7 +395,8 @@ let publishing = false; // 지금 올리기 요청을 보내는 중
 function renderPublish() {
   const btn = $('#btn-publish');
   const link = $('#publish-site');
-  const info = state.meta?.admin && !isPublic() ? publishInfo(state.meta.publish) : null;
+  // 공개 사이트 업로드는 내 컴퓨터 서버에만 있다 (공개·클라우드 모드에서는 표시하지 않는다)
+  const info = state.meta?.admin && !usesPolling() ? publishInfo(state.meta.publish) : null;
   btn.hidden = !info;
   if (link) link.hidden = !info?.url;
   if (!info) return;
@@ -416,7 +434,7 @@ let publishFollowTimer;
 let publishFollowCount = 0;
 function followPublish() {
   clearTimeout(publishFollowTimer);
-  if (!state.meta?.admin || !publishInfo(state.meta.publish)?.running || publishFollowCount >= 30) {
+  if (!state.meta?.admin || usesPolling() || !publishInfo(state.meta.publish)?.running || publishFollowCount >= 30) {
     publishFollowCount = 0;
     return;
   }
@@ -485,9 +503,9 @@ async function loadPosts(reset, { keep = false } = {}) {
     const rows = items.map(renderRow);
     if (reset) {
       $('#posts').replaceChildren(...rows);
-      // 공개 사이트: 이 목록이 반영한 수집 시각. 다음 확인에서 이보다 새 수집이 보이면 배너를 띄운다
+      // 공개·클라우드: 이 목록이 반영한 수집 시각. 다음 확인에서 이보다 새 수집이 보이면 배너를 띄운다
       seenCrawlAt = state.meta?.live?.lastCrawlAt ?? seenCrawlAt;
-      if (isPublic()) $('#new-banner').hidden = true; // 받는 사이 확인에서 띄운 배너도 이제 반영됐다
+      if (usesPolling()) $('#new-banner').hidden = true; // 받는 사이 확인에서 띄운 배너도 이제 반영됐다
     } else $('#posts').append(...rows);
     state.hasMore = data.hasMore;
     state.total = data.total;
@@ -1124,11 +1142,18 @@ function freshFor(d) {
 }
 
 let eventSource = null;
-/** 관리자 여부는 연결할 때의 쿠키로 정해지므로, 로그인/로그아웃 뒤에는 다시 연결한다. */
+/**
+ * 관리자 여부는 연결할 때의 쿠키로 정해지므로, 로그인/로그아웃 뒤에는 다시 연결한다.
+ * 공개·클라우드에는 SSE 가 없다 → 메타 확인을 (관리자 여부에 맞는 간격으로) 다시 건다.
+ */
 function connectEvents() {
   eventSource?.close();
   eventSource = null;
-  if (isPublic()) return null; // 공개 사이트엔 실시간 연결이 없다 (startPublicPolling)
+  if (usesPolling()) {
+    if (!state.meta?.admin) crawlFollow = null;
+    startPolling();
+    return null;
+  }
   const es = new EventSource('/api/events');
   eventSource = es;
   let opened = false;
@@ -1191,33 +1216,49 @@ function connectEvents() {
   return es;
 }
 
-// ---------- 공개 사이트: 새 글 확인 (2분마다 /api/meta) ----------
+// ---------- 공개·클라우드: 새 글 확인 (주기적으로 /api/meta) ----------
+// 공개 사이트와 클라우드의 방문자는 2분, 클라우드의 관리자는 30초, '지금 수집'을 누른 뒤에는 끝날 때까지 3초마다.
 let seenCrawlAt = null; // 지금 목록이 반영한 lastCrawlAt (loadPosts 가 처음부터 다시 받을 때 맞춘다)
 let pollTimer = null;
 let pollDue = false; // 탭이 숨겨진 동안 확인 차례가 지나갔다 → 돌아오면 한 번 확인
 let pollStarted = false;
 
-function startPublicPolling() {
-  if (pollStarted) return;
-  pollStarted = true;
-  schedulePoll();
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'hidden' && pollDue) pollPublic();
-  });
+function pollDelay() {
+  if (!isCloud() || !state.meta?.admin) return PUBLIC_POLL_MS;
+  return crawlFollow ? CRAWL_POLL_MS : CLOUD_ADMIN_POLL_MS;
 }
-function schedulePoll() {
+/** 확인을 시작한다. 이미 돌고 있으면 지금 상태(관리자 여부·수집 중)에 맞는 간격으로 다시 건다 */
+function startPolling() {
+  if (!pollStarted) {
+    pollStarted = true;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'hidden' && pollDue) pollMeta();
+    });
+  }
+  schedulePoll();
+}
+function schedulePoll(ms = pollDelay()) {
   clearTimeout(pollTimer);
   pollTimer = setTimeout(() => {
     pollTimer = null;
     // 숨겨진 탭에서는 쉬었다가, 다시 보일 때 한 번만 확인한다
     if (document.visibilityState === 'hidden') pollDue = true;
-    else pollPublic();
-  }, PUBLIC_POLL_MS);
+    else pollMeta();
+  }, ms);
 }
-async function pollPublic() {
+async function pollMeta() {
   pollDue = false;
   try {
+    const wasAdmin = !!state.meta?.admin;
     await loadMeta();
+    if (!!state.meta?.admin !== wasAdmin) {
+      // 다른 탭에서 로그인/로그아웃했거나 로그인이 만료됐다: 간격을 맞추고 목록을 그 권한으로 다시 받는다
+      if (!state.meta?.admin) crawlFollow = null;
+      if (!state.meta?.admin && ['shorts', 'filtered'].includes(state.board)) go({ board: 'story' });
+      else loadPosts(true);
+      return;
+    }
+    followCrawl();
     const at = state.meta?.live?.lastCrawlAt;
     if (at && at !== seenCrawlAt) {
       const b = $('#new-banner');
@@ -1229,6 +1270,53 @@ async function pollPublic() {
   } finally {
     schedulePoll();
   }
+}
+
+/**
+ * 클라우드 '지금 수집': 시작을 요청하고, 끝날 때까지 몇 초마다 메타를 받아 관리자 바·표시를 맞춘다.
+ * 끝나면 알리고, 새 수집이 반영됐으면 다음 확인과 같은 새 글 배너가 뜬다.
+ */
+async function crawlNowCloud() {
+  if (crawlFollow) return;
+  crawlFollow = { checks: 0, sawRunning: false, fromAt: state.meta?.live?.lastCrawlAt ?? null };
+  renderAdminBar();
+  renderLive(state.meta?.live);
+  let r;
+  try {
+    r = await api('/api/admin/crawl', { body: {} });
+  } catch (err) {
+    crawlFollow = null;
+    renderAdminBar();
+    renderLive(state.meta?.live);
+    toast(`실패: ${err.message}`);
+    return;
+  }
+  if (r?.running && state.meta) state.meta.live = { ...state.meta.live, running: true };
+  toast(r?.started === false ? '이미 수집 중이에요. 끝나면 알려드릴게요' : '수집을 시작했어요. 끝나면 알려드릴게요');
+  // 응답이 이미 끝났다고 하면(running: false) 바로 확인한다
+  schedulePoll(r?.running === false ? 0 : CRAWL_POLL_MS);
+}
+
+/** 메타를 받을 때마다: 따라가던 수집이 끝났는지 본다 */
+function followCrawl() {
+  const f = crawlFollow;
+  if (!f) return;
+  const lv = state.meta?.live || {};
+  f.checks++;
+  let done = false;
+  if (!state.meta?.admin || f.checks >= CRAWL_FOLLOW_MAX) {
+    crawlFollow = null; // 로그아웃했거나 너무 오래 걸린다: 평소 간격으로 (끝나면 다음 확인에서 보인다)
+  } else if (lv.running) {
+    f.sawRunning = true;
+    return;
+  } else {
+    done = f.sawRunning || (lv.lastCrawlAt ?? null) !== f.fromAt;
+    if (!done && f.checks < 3) return; // 서버가 아직 시작 전일 수 있다
+    crawlFollow = null;
+  }
+  renderAdminBar();
+  renderLive(state.meta?.live);
+  if (done) toast('수집을 마쳤어요');
 }
 
 // ---------- 이벤트 연결 ----------
@@ -1301,11 +1389,13 @@ function bind() {
       renderAdminBar();
       return;
     }
-    const ok = await promptPassword({ title: '관리자 로그인', desc: '실시간 수집, 걸러진 글 게시, 쇼츠 후보함을 관리해요.', endpoint: '/api/admin/login' });
+    // 클라우드에서는 누구나 이 창을 볼 수 있으므로 안내는 짧고 중립적으로
+    const desc = isCloud() ? '관리자 비밀번호를 입력하세요.' : '실시간 수집, 걸러진 글 게시, 쇼츠 후보함을 관리해요.';
+    const ok = await promptPassword({ title: '관리자 로그인', desc, endpoint: '/api/admin/login' });
     if (ok) {
       state.adminOpen = true;
       await loadMeta();
-      connectEvents(); // 관리자 쿠키로 다시 연결해야 실시간 상태('state')를 받는다
+      connectEvents(); // 관리자 쿠키로 다시 연결해야 실시간 상태('state')를 받는다 (클라우드: 30초 간격으로)
       await loadPosts(true);
       toast('관리자로 로그인했어요');
     }
@@ -1341,6 +1431,7 @@ function bind() {
     }
   });
   $('#btn-crawl').addEventListener('click', async () => {
+    if (isCloud()) return crawlNowCloud(); // SSE 가 없으니 끝날 때까지 메타로 따라간다
     try {
       await api('/api/admin/crawl', { body: {} });
       $('#btn-crawl').disabled = true;
@@ -1397,12 +1488,11 @@ try {
 }
 if (!location.hash) history.replaceState(null, '', '#/b/story');
 await route();
-// 공개 사이트는 실시간 연결 대신 2분마다 메타를 다시 받아 새 글을 알린다
-if (isPublic()) startPublicPolling();
-else connectEvents();
+// 로컬은 SSE, 공개 사이트·클라우드는 실시간 연결 대신 주기적으로 메타를 다시 받아 새 글을 알린다
+connectEvents();
 setInterval(() => {
   // 상대 시간 표기 갱신
   $$('.post time').forEach((t) => (t.textContent = timeAgo(t.getAttribute('datetime'))));
-  if (isPublic()) renderLive(state.meta?.live);
+  if (usesPolling()) renderLive(state.meta?.live);
   else renderPublish();
 }, 60e3);

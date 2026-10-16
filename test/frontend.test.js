@@ -378,11 +378,13 @@ function makePosts(n, prefix = 'p') {
   }));
 }
 
-function makeServer({ posts = makePosts(100), admin = false, adult = false, meta = {} } = {}) {
+function makeServer({ posts = makePosts(100), admin = false, adult = false, meta = {}, live = null } = {}) {
   const s = {
     posts,
     admin,
     adult,
+    // 주면 src/server.js 처럼 방문자에겐 live·lastCrawlAt 만, 관리자에겐 전부(intervalMin·running·nextRunAt) 보낸다
+    live,
     requests: [],
     fail: 0, // 0 이 아니면 그 수만큼 /api/posts 를 500 으로
     readDeferred: null, // 설정하면 /read 응답을 테스트가 직접 푼다
@@ -403,7 +405,9 @@ function makeServer({ posts = makePosts(100), admin = false, adult = false, meta
             pickCount: 1,
             adult: s.adult,
             admin: s.admin,
-            live: { live: false, lastCrawlAt: null, ...(s.admin ? { intervalMin: 15, running: false, nextRunAt: null } : {}) },
+            live: s.live
+              ? { live: s.live.live, lastCrawlAt: s.live.lastCrawlAt, ...(s.admin ? s.live : {}) }
+              : { live: false, lastCrawlAt: null, ...(s.admin ? { intervalMin: 15, running: false, nextRunAt: null } : {}) },
             sources: [{ id: 'dogdrip', name: '개드립', short: '개드립', color: '#000', active: true, count: 3 }],
             ...(s.admin ? { stats: { public: 3, adult: 0, blocked: 2, pending: 1, shorts: 0 }, ai: { enabled: false } } : {}),
             ...s.extraMeta,
@@ -436,6 +440,11 @@ function makeServer({ posts = makePosts(100), admin = false, adult = false, meta
         return { status: 200, body: { ok: true } };
       }
       if (p === '/api/admin/rules') return { status: 200, body: { ...s.rules, changed: 0 } };
+      if (p === '/api/admin/crawl') {
+        if (!s.admin) return { status: 401, body: { error: '관리자 전용' } };
+        if (s.onCrawl) return s.onCrawl();
+        return { status: 202, body: { started: true, running: true } };
+      }
       if (p === '/api/admin/publish') {
         if (!s.admin) return { status: 401, body: { error: '관리자 전용' } };
         if (s.onPublish) return s.onPublish();
@@ -469,7 +478,7 @@ function makeServer({ posts = makePosts(100), admin = false, adult = false, meta
 const HOOK = `globalThis.__app = {
   state, loadPosts, route, go, hashOf, parseHash, freshFor, promptPassword, unlockAdult, openReader, closeOverlay,
   renderReaderAdmin, renderBoards, adminUpdate, connectEvents, shownRows,
-  loadMeta, pollPublic, publishInfo, renderPublish,
+  loadMeta, pollMeta, publishInfo, renderPublish,
 };
 `;
 
@@ -1265,4 +1274,261 @@ test('frontend: 공개 모드·반영 상태 스타일이 있고, 관리자 버�
   assert.match(HTML_SRC, /id="live-pill"[^>]*hidden/);
   // 운영자용 정렬(쇼츠추천순)도 메타를 받기 전·메타를 못 받았을 때 방문자에게 보이지 않게
   assert.match(HTML_SRC, /data-sort="shorts"[^>]*hidden/);
+});
+
+// ================================================================ 클라우드 모드 (worker/CLOUD.md 원칙 2)
+const ago = (min) => new Date(Date.now() - min * 60e3).toISOString();
+const cloudServer = ({ admin = false, lastCrawlAt = ago(5), live = {}, meta = {} } = {}) =>
+  makeServer({ admin, meta: { mode: 'cloud', ...meta }, live: { live: true, intervalMin: 15, running: false, nextRunAt: null, lastCrawlAt, ...live } });
+const crawlCalls = (t) => t.server.requests.filter((r) => r.path === '/api/admin/crawl');
+async function loginAdmin(t) {
+  t.$('#btn-admin').click();
+  await t.clock.advance(50);
+  assert.equal(t.$('#pw-modal').hidden, false, '로그인 창');
+  t.$('#pw-input').value = 'admin';
+  await t.submit(t.$('#pw-form'));
+  await t.clock.advance(0);
+}
+
+test('frontend(클라우드): 방문자 — 👤 는 보이고, SSE 없이 2분마다 메타 확인, 갱신 표시·로그인 안내는 중립적', async () => {
+  const server = cloudServer({ lastCrawlAt: ago(5) });
+  const t = await boot({ hash: '#/b/all', server, scrollY: 1000 });
+  assert.equal(t.$('#btn-admin').hidden, false, '👤 버튼 보임');
+  assert.equal(t.$('#adminbar').hidden, true);
+  assert.equal(t.sources.length, 0, '/api/events 를 열지 않는다');
+  const pill = t.$('#live-pill');
+  assert.equal(t.$('#live-pill .txt').textContent, '5분 전 갱신', '방문자에겐 수집 상태 대신 갱신 시각만');
+  assert.ok(pill.classList.contains('public'));
+  assert.equal(t.$('#sorts button[data-sort="shorts"]').hidden, true);
+  assert.equal(t.rowIds().length, 30);
+
+  const before = metaCount(t);
+  await t.clock.advance(119e3);
+  assert.equal(metaCount(t), before, '방문자는 2분 전에는 받지 않는다');
+  await t.clock.advance(1e3);
+  assert.equal(metaCount(t), before + 1);
+  assert.equal(t.$('#new-banner').hidden, true, '같은 수집이면 배너 없음');
+  server.live.lastCrawlAt = new Date().toISOString();
+  await t.clock.advance(120e3);
+  assert.equal(t.$('#new-banner').hidden, false);
+  assert.equal(t.$('#new-banner').textContent, '새 글이 있어요 — 눌러서 보기');
+  assert.equal(t.$('#live-pill .txt').textContent, '방금 갱신');
+
+  // 👤 → 로그인 창. 누구나 볼 수 있으니 안내에 운영 이야기를 쓰지 않는다
+  t.$('#btn-admin').click();
+  await t.clock.advance(50);
+  assert.equal(t.$('#pw-modal').hidden, false);
+  assert.equal(t.$('#pw-desc').textContent, '관리자 비밀번호를 입력하세요.');
+  assert.doesNotMatch(t.$('#pw-desc').textContent, /쇼츠|수집|후보/);
+});
+
+test('frontend(클라우드): 관리자로 로그인하면 관리자 바·걸러진 글·후보함·금지어가 그대로, 30초마다 메타 확인, 업로드 표시 없음', async () => {
+  // 혹시 meta.publish 가 와도 클라우드에서는 보이지 않는다
+  const server = cloudServer({ lastCrawlAt: ago(10), meta: { publish: { enabled: true, url: 'https://x.example.invalid', lastOkAt: ago(3) } } });
+  server.posts[0].status = 'blocked';
+  const t = await boot({ hash: '#/b/all', server, scrollY: 1000 });
+  await loginAdmin(t);
+  assert.equal(t.app.state.meta.admin, true);
+  assert.equal(t.$('#adminbar').hidden, false, '관리자 바');
+  assert.equal(t.sources.length, 0, '로그인해도 SSE 는 열지 않는다');
+  assert.equal(t.$('#btn-publish').hidden, true, '공개 사이트 업로드 표시 없음');
+  assert.equal(t.$('#publish-site').hidden, true);
+  assert.ok(!t.$('#live-pill').classList.contains('public'), '관리자에겐 수집 상태 표시');
+  assert.equal(t.$('#live-pill .txt').textContent, '실시간');
+  assert.equal(t.$('#live-toggle').checked, true);
+  assert.equal(t.$('#sorts button[data-sort="shorts"]').hidden, false);
+  assert.ok(t.$('#boards a[href="#/b/filtered"]'), '걸러진 글 칩');
+  assert.ok(t.$('#boards a[href="#/b/shorts"]'), '후보함 칩');
+  // Claude 검수 안내는 클라우드에 맞게 (Worker 비밀)
+  t.$('#admin-stats .stat-btn').click();
+  assert.match(t.toastText(), /Worker 비밀 ANTHROPIC_API_KEY/);
+
+  // 관리자는 30초마다
+  const before = metaCount(t);
+  await t.clock.advance(29e3);
+  assert.equal(metaCount(t), before);
+  await t.clock.advance(1e3);
+  assert.equal(metaCount(t), before + 1, '30초');
+  // 다른 곳(알람)에서 시작한 수집·다음 수집 시각도 다음 확인에서 관리자 바에
+  server.live.running = true;
+  server.live.nextRunAt = new Date(Date.now() + 15 * 60e3).toISOString();
+  await t.clock.advance(30e3);
+  assert.equal(metaCount(t), before + 2);
+  assert.equal(t.$('#btn-crawl').disabled, true);
+  assert.equal(t.$('#btn-crawl').textContent, '수집 중…');
+  assert.equal(t.$('#live-pill .txt').textContent, '수집 중');
+  assert.match(t.$('#crawl-info').textContent, /^마지막 10분 전 · 다음 /);
+  server.live.running = false;
+  server.live.lastCrawlAt = new Date().toISOString();
+  await t.clock.advance(30e3);
+  assert.equal(t.$('#btn-crawl').disabled, false);
+  assert.equal(t.$('#btn-crawl').textContent, '지금 수집');
+  assert.match(t.$('#crawl-info').textContent, /^마지막 방금/);
+  assert.equal(t.$('#new-banner').hidden, false, '새 수집이면 배너');
+  assert.equal(t.$('#new-banner').textContent, '새 글이 있어요 — 눌러서 보기');
+
+  // 걸러진 글 → 게시하기
+  await t.setHash('#/b/filtered');
+  assert.deepEqual(t.rowIds(), ['p0']);
+  t.$$('.post[data-id="p0"] .row-actions button').find((b) => b.textContent === '게시하기').click();
+  await t.clock.advance(1e3); // 처리 뒤 메타 한 번 (refreshMetaSoon)
+  assert.equal(server.posts[0].status, 'ok');
+  assert.deepEqual(t.rowIds(), [], '게시한 글은 걸러진 글함에서 빠진다');
+  // 후보함
+  await t.setHash('#/b/shorts');
+  assert.equal(t.app.state.board, 'shorts');
+  assert.equal(t.$('#stage-filter').hidden, false);
+  // 금지어 관리
+  t.$('#btn-rules').click();
+  await t.clock.advance(0);
+  assert.equal(t.$('#rules-modal').hidden, false);
+  assert.equal(t.$('#rules-block').value, '정치');
+  await t.key('Escape');
+  assert.equal(t.$('#rules-modal').hidden, true);
+
+  // 로그아웃하면 방문자 화면, 다시 2분 간격
+  t.$('#btn-logout').click();
+  await t.clock.advance(0);
+  assert.equal(t.app.state.meta.admin, false);
+  assert.equal(t.$('#adminbar').hidden, true);
+  assert.equal(t.location.hash, '#/b/story', '관리자 게시판에서 나온다');
+  assert.ok(t.$('#live-pill').classList.contains('public'));
+  assert.equal(t.sources.length, 0);
+  const after = metaCount(t);
+  await t.clock.advance(60e3);
+  assert.equal(metaCount(t), after, '방문자가 되면 30초 간격이 아니다');
+  await t.clock.advance(60e3);
+  assert.equal(metaCount(t), after + 1);
+});
+
+test('frontend(클라우드): 지금 수집 → 끝날 때까지 3초마다 메타를 받아 표시하고, 끝나면 알림과 새 글 배너', async () => {
+  const server = cloudServer({ admin: true, lastCrawlAt: ago(20) });
+  server.onCrawl = () => {
+    server.live.running = true;
+    return { status: 202, body: { started: true, running: true } };
+  };
+  const t = await boot({ hash: '#/b/all', server, scrollY: 1000 });
+  assert.equal(t.sources.length, 0);
+  const btn = t.$('#btn-crawl');
+  const before = metaCount(t);
+  btn.click();
+  await t.clock.advance(0);
+  assert.equal(crawlCalls(t).length, 1);
+  assert.equal(crawlCalls(t)[0].method, 'POST');
+  assert.equal(btn.disabled, true);
+  assert.equal(btn.textContent, '수집 중…');
+  assert.equal(t.$('#live-pill .txt').textContent, '수집 중');
+  assert.equal(t.toastText(), '수집을 시작했어요. 끝나면 알려드릴게요');
+  btn.click(); // 수집 중에는 다시 보내지 않는다
+  await t.clock.advance(0);
+  assert.equal(crawlCalls(t).length, 1);
+
+  await t.clock.advance(3e3);
+  assert.equal(metaCount(t), before + 1, '3초 뒤 확인');
+  assert.equal(btn.disabled, true, '아직 수집 중');
+  await t.clock.advance(3e3);
+  assert.equal(metaCount(t), before + 2);
+  assert.equal(t.$('#new-banner').hidden, true);
+
+  server.live.running = false;
+  server.live.lastCrawlAt = new Date().toISOString();
+  await t.clock.advance(3e3);
+  assert.equal(metaCount(t), before + 3);
+  assert.equal(btn.disabled, false);
+  assert.equal(btn.textContent, '지금 수집');
+  assert.equal(t.$('#live-pill .txt').textContent, '실시간');
+  assert.equal(t.toastText(), '수집을 마쳤어요');
+  assert.equal(t.$('#new-banner').hidden, false, '새 글 배너 (공개 모드와 같은 방식)');
+  assert.equal(t.$('#new-banner').textContent, '새 글이 있어요 — 눌러서 보기');
+
+  // 끝나면 다시 30초 간격
+  await t.clock.advance(29e3);
+  assert.equal(metaCount(t), before + 3);
+  await t.clock.advance(1e3);
+  assert.equal(metaCount(t), before + 4);
+
+  // 배너를 누르면 새 목록, 같은 수집으로는 다시 뜨지 않는다
+  t.$('#new-banner').click();
+  await t.clock.advance(0);
+  assert.equal(t.$('#new-banner').hidden, true);
+  await t.clock.advance(30e3);
+  assert.equal(t.$('#new-banner').hidden, true);
+});
+
+test('frontend(클라우드): 수집이 시작되지 않으면 몇 번 확인 뒤 버튼을 되살리고, 실패·이미 끝난 응답도 처리', async () => {
+  const server = cloudServer({ admin: true, lastCrawlAt: ago(20) });
+  const t = await boot({ hash: '#/b/all', server, scrollY: 1000 });
+  const btn = t.$('#btn-crawl');
+  // 서버가 받았다고만 하고 수집 기록이 바뀌지 않는다
+  btn.click();
+  await t.clock.advance(6e3);
+  assert.equal(btn.disabled, true, '서버가 시작하기 전일 수 있어 잠시 기다린다');
+  await t.clock.advance(3e3);
+  assert.equal(btn.disabled, false, '세 번 확인해도 그대로면 되살린다');
+  assert.notEqual(t.toastText(), '수집을 마쳤어요');
+  const m = metaCount(t);
+  await t.clock.advance(3e3);
+  assert.equal(metaCount(t), m, '평소 간격(30초)으로 돌아간다');
+
+  // 실패하면 이유를 알리고 버튼을 되살린다
+  server.onCrawl = () => ({ status: 429, body: { error: '잠시 뒤에 다시 해 주세요' } });
+  btn.click();
+  await t.clock.advance(0);
+  assert.equal(t.toastText(), '실패: 잠시 뒤에 다시 해 주세요');
+  assert.equal(btn.disabled, false);
+  assert.equal(btn.textContent, '지금 수집');
+
+  // 이미 끝났다는 응답(running: false)이면 바로 확인
+  server.onCrawl = () => {
+    server.live.lastCrawlAt = new Date().toISOString();
+    return { status: 200, body: { ok: true, started: true, running: false } };
+  };
+  const m2 = metaCount(t);
+  btn.click();
+  await t.clock.advance(0);
+  assert.equal(metaCount(t), m2 + 1);
+  assert.equal(btn.disabled, false);
+  assert.equal(t.toastText(), '수집을 마쳤어요');
+  assert.equal(t.$('#new-banner').hidden, false);
+});
+
+test('frontend(클라우드): 다른 탭에서 로그아웃·로그인이 만료되면 다음 확인에서 방문자 화면으로', async () => {
+  const server = cloudServer({ admin: true, lastCrawlAt: ago(5) });
+  server.posts[0].status = 'blocked';
+  const t = await boot({ hash: '#/b/filtered', server });
+  assert.deepEqual(t.rowIds(), ['p0']);
+  t.$('#btn-crawl').click();
+  await t.clock.advance(0);
+  server.admin = false;
+  await t.clock.advance(3e3);
+  assert.equal(t.app.state.meta.admin, false);
+  assert.equal(t.location.hash, '#/b/story');
+  assert.equal(t.$('#adminbar').hidden, true);
+  assert.ok(t.$('#live-pill').classList.contains('public'));
+  const m = metaCount(t);
+  await t.clock.advance(60e3);
+  assert.equal(metaCount(t), m, '따라가던 수집도 멈추고 방문자 간격(2분)으로');
+  await t.clock.advance(60e3);
+  assert.equal(metaCount(t), m + 1);
+});
+
+test('frontend(로컬 관리자): 지금 수집은 예전처럼 SSE 로 기다리고 메타를 주기적으로 받지 않는다', async () => {
+  const t = await boot({ server: makeServer({ admin: true }) });
+  assert.equal(t.sources.length, 1);
+  const before = metaCount(t);
+  t.$('#btn-crawl').click();
+  await t.clock.advance(0);
+  assert.equal(crawlCalls(t).length, 1);
+  assert.equal(t.toastText(), '수집을 시작했어요. 끝나면 알려드릴게요');
+  assert.equal(t.$('#btn-crawl').disabled, true);
+  await t.clock.advance(60e3);
+  assert.equal(metaCount(t), before, '로컬은 수집 중에도 메타를 따로 받지 않는다');
+  t.sources[0].emit('state', { live: false, intervalMin: 15, running: false, nextRunAt: null, lastCrawlAt: new Date().toISOString() });
+  await t.clock.advance(0);
+  assert.equal(t.$('#btn-crawl').disabled, false);
+  // 로그인 안내도 예전 그대로
+  const v = await boot();
+  v.$('#btn-admin').click();
+  await v.clock.advance(50);
+  assert.match(v.$('#pw-desc').textContent, /실시간 수집/);
 });

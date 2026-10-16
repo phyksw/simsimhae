@@ -63,9 +63,21 @@ const SCHEMA = {
 };
 
 let client = null;
+let clientFor = null;
 function getClient() {
-  // 재시도는 SDK 안에서 한 번만 (429·5xx 가 이어지면 이번 수집은 접고 다음 수집 때 다시 보낸다)
-  if (!client) client = new Anthropic({ maxRetries: 1, timeout: 120e3 });
+  // 키·주소는 설정에서 (클라우드는 Worker 비밀을 configure 로 넣는다). 비어 있으면 SDK 가 환경변수에서 찾는다.
+  const key = `${config.ai.apiKey || ''}
+${config.ai.baseURL || ''}`;
+  if (!client || clientFor !== key) {
+    // 재시도는 SDK 안에서 한 번만 (429·5xx 가 이어지면 이번 수집은 접고 다음 수집 때 다시 보낸다)
+    client = new Anthropic({
+      ...(config.ai.apiKey ? { apiKey: config.ai.apiKey } : {}),
+      ...(config.ai.baseURL ? { baseURL: config.ai.baseURL } : {}),
+      maxRetries: 1,
+      timeout: 120e3,
+    });
+    clientFor = key;
+  }
   return client;
 }
 

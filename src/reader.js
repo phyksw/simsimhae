@@ -1,16 +1,58 @@
 // 본문 보기: 원문 사이트에서 본문만 가져와 안전하게 정리(sanitize)하고, 이미지·영상은 우리 서버의 프록시를 거치게 바꾼다.
 // 본문을 읽은 김에 본문 텍스트로 한 번 더 검열한다 (제목은 멀쩡한데 본문이 후방/정치인 경우).
+// 캐시: 메모리(최근 300개, 30분). 클라우드는 setReadCache 로 DO 저장소를 뒤에 붙여 오래(기본 12시간) 둔다.
 import sanitizeHtml from 'sanitize-html';
 import * as cheerio from 'cheerio';
 import { getSource } from './sources/index.js';
 import { hostMatches } from './lib/util.js';
+import { withRequestScope } from './lib/http.js';
 import { classify } from './filter.js';
+import { config } from './config.js';
 import * as store from './store.js';
 
 const CACHE_MAX = 300;
 const CACHE_TTL_MS = 30 * 60e3;
 const cache = new Map(); // id -> {at, data}
 const inflight = new Map(); // id -> Promise
+/** 오래 두는 캐시 { get(id): {at, data}|null, set(id, at, data), delete(id), clear() } (클라우드: DO 저장소) */
+let persist = null;
+let ttlMs = CACHE_TTL_MS;
+
+/**
+ * 미리보기를 메모리 밖에도 둔다 (클라우드: SiteDO 가 DO SQLite 를 넘긴다). 메모리 캐시는 비운다.
+ * @param {{get(id: string): {at: number, data: any}|null, set(id: string, at: number, data: any): void, delete(id: string): void, clear(): void}|null} p
+ * @param {{ttlMs?: number}} [opts]
+ */
+export function setReadCache(p, { ttlMs: t } = {}) {
+  persist = p || null;
+  ttlMs = t ?? CACHE_TTL_MS;
+  cache.clear();
+}
+
+function remember(id, entry) {
+  cache.delete(id);
+  cache.set(id, entry);
+  if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
+}
+
+/** 아직 유효한 캐시 (메모리 → 저장소 순) */
+function cachedEntry(id) {
+  let hit = cache.get(id);
+  if (!hit && persist) {
+    try {
+      hit = persist.get(id);
+    } catch (e) {
+      console.warn(`[reader] 캐시 읽기 실패: ${e.message}`);
+    }
+    if (hit) remember(id, hit);
+  }
+  return hit && Date.now() - hit.at < ttlMs ? hit : null;
+}
+
+/** 미리보기가 캐시에 있는지 (클라우드 알람의 미리 준비용) */
+export function hasCached(id) {
+  return !!cachedEntry(id);
+}
 
 const EMBED_HOSTS = ['www.youtube.com', 'youtube.com', 'www.youtube-nocookie.com', 'player.vimeo.com', 'streamable.com', 'clips.twitch.tv'];
 
@@ -152,14 +194,15 @@ export function htmlToText(html) {
  * @returns {Promise<{title: string, html: string, text: string, mediaCount: number, statusChanged: boolean}>}
  */
 export async function readPost(post) {
-  const hit = cache.get(post.id);
-  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.data;
+  const hit = cachedEntry(post.id);
+  if (hit) return hit.data;
   if (inflight.has(post.id)) return inflight.get(post.id);
 
   const job = (async () => {
     const src = await getSource(post.source);
     if (!src) throw new Error('알 수 없는 출처');
-    const article = await src.read(post.url);
+    // 미리보기는 같은 사이트 대기열에서 수집 목록 요청 뒤에 서고, 너무 오래 기다려야 하면 바로 포기한다 (BusyError → 원문 주소로 안내)
+    const article = await withRequestScope({ priority: 'preview', maxWaitMs: config.previewMaxWaitMs || undefined }, () => src.read(post.url));
     const html = cleanHtml(article.html || '', src);
     const text = htmlToText(html);
     const mediaCount = (html.match(/<(img|video|iframe)\b/g) || []).length;
@@ -187,8 +230,16 @@ export async function readPost(post) {
     const comments = cleanComments(article.comments, src);
     const commentTotal = Number.isFinite(article.commentTotal) ? article.commentTotal : post.commentCount ?? null;
     const data = { title: article.title || post.title, html, text, mediaCount, statusChanged, comments, commentTotal };
-    cache.set(post.id, { at: Date.now(), data });
-    if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
+    const at = Date.now();
+    remember(post.id, { at, data });
+    if (persist) {
+      // 다시 꺼낼 때는 상태 변경을 또 알리지 않는다 (이번 응답에서 이미 반영)
+      try {
+        persist.set(post.id, at, { ...data, statusChanged: false });
+      } catch (e) {
+        console.warn(`[reader] 캐시 저장 실패: ${e.message}`);
+      }
+    }
     return data;
   })().finally(() => inflight.delete(post.id));
 
@@ -198,4 +249,15 @@ export async function readPost(post) {
 
 export function forgetCached(id) {
   cache.delete(id);
+  try {
+    persist?.delete(id);
+  } catch (e) {
+    console.warn(`[reader] 캐시 지우기 실패: ${e.message}`);
+  }
+}
+
+/** 미리보기 캐시를 모두 지운다 (클라우드로 옮기기 뒤) */
+export function forgetAll() {
+  cache.clear();
+  persist?.clear();
 }
