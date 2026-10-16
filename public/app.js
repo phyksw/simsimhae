@@ -60,6 +60,14 @@ const state = {
 const STAGES = { candidate: '후보', script: '대본 작성', done: '촬영 완료' };
 const VERDICT_LABEL = { ok: '정상', politics: '정치', hate: '혐오', dark: '사건사고', adult: '므흣', not_humor: '유머 아님' };
 
+/**
+ * 공개 사이트(Cloudflare Worker)에서 열렸는지 (/api/meta 의 mode 가 "public").
+ * 공개 사이트는 읽기 전용이라 관리자 기능·실시간 연결(SSE)이 없고, 2분마다 메타를 다시 받아 새 글을 알린다.
+ */
+const isPublic = () => state.meta?.mode === 'public';
+const PUBLIC_POLL_MS = 2 * 60e3;
+const httpUrl = (u) => (typeof u === 'string' && /^https?:\/\//i.test(u) ? u : null);
+
 // ---------- 공용 ----------
 async function api(path, opts = {}) {
   const init = { credentials: 'same-origin', ...opts };
@@ -189,6 +197,7 @@ async function loadMeta() {
   renderLive(state.meta.live);
   renderBoards();
   renderAdminBar();
+  followPublish();
 }
 
 function boardName(board) {
@@ -229,6 +238,8 @@ function renderBoards() {
   $('#board-title').textContent = boardName(state.board);
   $('#stage-filter').hidden = state.board !== 'shorts';
   $$('#stage-filter button').forEach((b) => b.classList.toggle('active', b.dataset.stage === state.stage));
+  // 공개 사이트에는 관리자 기능이 없다 (관리는 내 컴퓨터에서만). 처음엔 숨겨 두고 메타를 받은 뒤 정한다.
+  $('#btn-admin').hidden = isPublic();
   $('#btn-admin').classList.toggle('on', !!m.admin);
   $('#btn-admin').title = m.admin ? '관리자 바 열기/닫기' : '관리자 로그인';
 }
@@ -244,6 +255,17 @@ function renderSorts() {
 
 function renderLive(live) {
   const pill = $('#live-pill');
+  if (isPublic()) {
+    // 공개 사이트: 수집 상태 대신 마지막 갱신 시각만 중립적으로 ("5분 전 갱신")
+    const at = live?.lastCrawlAt;
+    pill.hidden = !at;
+    pill.classList.add('public');
+    pill.classList.remove('on', 'busy');
+    pill.querySelector('.txt').textContent = at ? `${timeAgo(at)} 갱신` : '';
+    pill.title = at ? `마지막 갱신 ${fullTime(at)}` : '';
+    return;
+  }
+  pill.hidden = false;
   pill.classList.toggle('on', !!live?.live);
   pill.classList.toggle('busy', !!live?.running);
   pill.querySelector('.txt').textContent = live?.running ? '수집 중' : live?.live ? '실시간' : '일시정지';
@@ -254,8 +276,9 @@ function renderLive(live) {
 function renderAdminBar() {
   const m = state.meta;
   const bar = $('#adminbar');
-  bar.hidden = !m?.admin || !state.adminOpen;
-  if (!m?.admin) return;
+  bar.hidden = !m?.admin || !state.adminOpen || isPublic();
+  if (!m?.admin || isPublic()) return;
+  renderPublish();
   const lv = m.live || {};
   $('#live-toggle').checked = !!lv.live;
   $('#live-label').textContent = lv.live ? 'ON' : 'OFF';
@@ -328,6 +351,73 @@ function renderAdminBar() {
   );
 }
 
+// ---------- 공개 사이트 반영 상태 (로컬 관리자 바) ----------
+/**
+ * meta.publish 를 화면에 쓸 모양으로. 없거나 enabled 가 false 면 null (표시하지 않음).
+ * 필드 이름은 로컬 서버(src/publish.js)와 맞추되, 비슷한 이름도 받아 준다.
+ */
+function publishInfo(pub) {
+  if (!pub || typeof pub !== 'object' || pub.enabled === false) return null;
+  const at = pub.lastOkAt ?? pub.lastSuccessAt ?? pub.lastPublishedAt ?? pub.publishedAt ?? pub.lastAt ?? null;
+  const raw = pub.lastError ?? pub.error ?? null;
+  let error = raw ? (typeof raw === 'string' ? raw : raw.message || '알 수 없는 오류') : null;
+  const errorAt = raw && typeof raw === 'object' ? raw.at : pub.lastErrorAt;
+  // 오류 뒤에 다시 성공했으면 지난 오류는 보이지 않는다
+  if (error && at && errorAt && new Date(at) > new Date(errorAt)) error = null;
+  const reads = typeof pub.reads?.done === 'number' ? pub.reads : null; // 미리보기 문서 { done, pending }
+  return { at, error, running: !!(pub.running ?? pub.busy), url: httpUrl(pub.url ?? pub.siteUrl ?? null), reads };
+}
+
+let publishing = false; // 지금 올리기 요청을 보내는 중
+function renderPublish() {
+  const btn = $('#btn-publish');
+  const link = $('#publish-site');
+  const info = state.meta?.admin && !isPublic() ? publishInfo(state.meta.publish) : null;
+  btn.hidden = !info;
+  if (link) link.hidden = !info?.url;
+  if (!info) return;
+  const busy = publishing || info.running;
+  btn.disabled = busy;
+  btn.classList.toggle('warn', !!info.error && !busy);
+  btn.textContent = busy
+    ? '공개 사이트: 올리는 중…'
+    : `${info.error ? '⚠ ' : ''}공개 사이트: ${info.at ? `마지막 반영 ${timeAgo(info.at)}` : '아직 반영 전'}`;
+  const when = info.at ? `마지막 반영 ${fullTime(info.at)}` : '아직 반영 전';
+  const reads = info.reads ? `\n미리보기 ${info.reads.done}개 올림${info.reads.pending ? ` · ${info.reads.pending}개 남음` : ''}` : '';
+  btn.title = `${info.error ? `오류: ${info.error}\n` : ''}${when} · 누르면 지금 올려요${reads}`;
+  if (link && info.url) link.setAttribute('href', info.url);
+}
+
+async function publishNow() {
+  if (publishing) return;
+  publishing = true;
+  renderPublish();
+  try {
+    const r = await api('/api/admin/publish', { body: {} });
+    if (r && r.ok === false) throw new Error(r.error || '실패');
+    toast(r?.started || r?.running ? '공개 사이트에 올리는 중이에요' : '공개 사이트에 올렸어요');
+  } catch (err) {
+    toast(`공개 사이트에 올리지 못했어요: ${err.message}`, 5000);
+  } finally {
+    publishing = false;
+    await loadMeta().catch(() => {});
+    renderPublish();
+  }
+}
+
+/** 올리는 중이면 끝날 때까지 메타를 몇 번 더 받아 반영 시각·오류를 맞춘다 */
+let publishFollowTimer;
+let publishFollowCount = 0;
+function followPublish() {
+  clearTimeout(publishFollowTimer);
+  if (!state.meta?.admin || !publishInfo(state.meta.publish)?.running || publishFollowCount >= 30) {
+    publishFollowCount = 0;
+    return;
+  }
+  publishFollowCount++;
+  publishFollowTimer = setTimeout(() => loadMeta().catch(() => {}), 4000);
+}
+
 // ---------- 목록 ----------
 const PAGE_SIZE = 30;
 let listSeq = 0;
@@ -387,8 +477,12 @@ async function loadPosts(reset, { keep = false } = {}) {
       if (reset || items.length >= PAGE_SIZE / 2 || !data.hasMore) break;
     }
     const rows = items.map(renderRow);
-    if (reset) $('#posts').replaceChildren(...rows);
-    else $('#posts').append(...rows);
+    if (reset) {
+      $('#posts').replaceChildren(...rows);
+      // 공개 사이트: 이 목록이 반영한 수집 시각. 다음 확인에서 이보다 새 수집이 보이면 배너를 띄운다
+      seenCrawlAt = state.meta?.live?.lastCrawlAt ?? seenCrawlAt;
+      if (isPublic()) $('#new-banner').hidden = true; // 받는 사이 확인에서 띄운 배너도 이제 반영됐다
+    } else $('#posts').append(...rows);
     state.hasMore = data.hasMore;
     state.total = data.total;
     $('#btn-more').hidden = !data.hasMore;
@@ -631,6 +725,14 @@ async function openReader(p) {
     if (e.status === 403) {
       closeOverlay($('#reader'));
       if (await unlockAdult()) openReader(p);
+      return;
+    }
+    if (e.status === 404 && e.data?.url) {
+      // 공개 사이트: 글은 있는데 미리보기 문서가 아직 올라오지 않았다
+      $('#reader-body').replaceChildren(
+        h('p', { class: 'notice' }, '미리보기를 준비 중이에요'),
+        h('p', {}, h('a', { class: 'btn primary', href: httpUrl(e.data.url) || p.url, target: '_blank', rel: 'noopener noreferrer' }, '원문 보기 ↗')),
+      );
       return;
     }
     if (e.status === 409) {
@@ -1003,6 +1105,8 @@ let eventSource = null;
 /** 관리자 여부는 연결할 때의 쿠키로 정해지므로, 로그인/로그아웃 뒤에는 다시 연결한다. */
 function connectEvents() {
   eventSource?.close();
+  eventSource = null;
+  if (isPublic()) return null; // 공개 사이트엔 실시간 연결이 없다 (startPublicPolling)
   const es = new EventSource('/api/events');
   eventSource = es;
   let opened = false;
@@ -1050,7 +1154,59 @@ function connectEvents() {
     renderLive(d);
     renderAdminBar();
   });
+  // 공개 사이트에 올린 결과 (로컬 서버가 보내면). 관리자 바의 반영 상태만 바꾼다
+  es.addEventListener('publish', (e) => {
+    if (!state.meta?.admin) return;
+    let d;
+    try {
+      d = JSON.parse(e.data);
+    } catch {
+      return;
+    }
+    state.meta.publish = { ...state.meta.publish, ...d };
+    renderPublish();
+  });
   return es;
+}
+
+// ---------- 공개 사이트: 새 글 확인 (2분마다 /api/meta) ----------
+let seenCrawlAt = null; // 지금 목록이 반영한 lastCrawlAt (loadPosts 가 처음부터 다시 받을 때 맞춘다)
+let pollTimer = null;
+let pollDue = false; // 탭이 숨겨진 동안 확인 차례가 지나갔다 → 돌아오면 한 번 확인
+let pollStarted = false;
+
+function startPublicPolling() {
+  if (pollStarted) return;
+  pollStarted = true;
+  schedulePoll();
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'hidden' && pollDue) pollPublic();
+  });
+}
+function schedulePoll() {
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(() => {
+    pollTimer = null;
+    // 숨겨진 탭에서는 쉬었다가, 다시 보일 때 한 번만 확인한다
+    if (document.visibilityState === 'hidden') pollDue = true;
+    else pollPublic();
+  }, PUBLIC_POLL_MS);
+}
+async function pollPublic() {
+  pollDue = false;
+  try {
+    await loadMeta();
+    const at = state.meta?.live?.lastCrawlAt;
+    if (at && at !== seenCrawlAt) {
+      const b = $('#new-banner');
+      b.textContent = '새 글이 있어요 — 눌러서 보기';
+      b.hidden = false;
+    }
+  } catch {
+    // 잠깐 연결이 안 되면 다음 차례에 다시
+  } finally {
+    schedulePoll();
+  }
 }
 
 // ---------- 이벤트 연결 ----------
@@ -1110,6 +1266,7 @@ function bind() {
 
   // 관리자
   $('#btn-admin').addEventListener('click', async () => {
+    if (isPublic()) return; // 공개 사이트에는 관리자 기능이 없다
     if (state.meta?.admin) {
       state.adminOpen = !state.adminOpen;
       store.set('hg.adminOpen', state.adminOpen);
@@ -1166,6 +1323,7 @@ function bind() {
       toast(`실패: ${err.message}`);
     }
   });
+  $('#btn-publish').addEventListener('click', publishNow);
   $('#btn-sources').addEventListener('click', () => {
     $('#source-status').hidden = !$('#source-status').hidden;
   });
@@ -1210,8 +1368,12 @@ try {
 }
 if (!location.hash) history.replaceState(null, '', '#/b/story');
 await route();
-connectEvents();
+// 공개 사이트는 실시간 연결 대신 2분마다 메타를 다시 받아 새 글을 알린다
+if (isPublic()) startPublicPolling();
+else connectEvents();
 setInterval(() => {
   // 상대 시간 표기 갱신
   $$('.post time').forEach((t) => (t.textContent = timeAgo(t.getAttribute('datetime'))));
+  if (isPublic()) renderLive(state.meta?.live);
+  else renderPublish();
 }, 60e3);

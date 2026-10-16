@@ -12,13 +12,13 @@
   <header class="topbar">
     <div class="topbar-inner">
       <a class="brand" href="#/b/story" id="brand"><img class="brand-mark" src="/logo.svg" alt="" width="32" height="32" /><span id="site-name">심심풀이</span></a>
-      <span class="live-pill" id="live-pill" title="실시간 수집 상태"><span class="dot"></span><span class="txt">실시간</span></span>
+      <span class="live-pill" id="live-pill" title="실시간 수집 상태" hidden><span class="dot"></span><span class="txt">실시간</span></span>
       <form class="search" id="search-form" role="search">
         <input id="search" type="search" placeholder="제목 검색" autocomplete="off" aria-label="제목 검색" />
       </form>
       <div class="top-actions">
         <button class="icon-btn" id="btn-settings" title="보기 설정" aria-label="보기 설정">⚙</button>
-        <button class="icon-btn" id="btn-admin" title="관리자" aria-label="관리자">👤</button>
+        <button class="icon-btn" id="btn-admin" title="관리자" aria-label="관리자" hidden>👤</button>
       </div>
     </div>
     <nav class="boards" id="boards" aria-label="게시판"></nav>
@@ -39,6 +39,8 @@
       </label>
       <button class="btn" id="btn-crawl">지금 수집</button>
       <span class="muted small" id="crawl-info"></span>
+      <button class="btn sm ghost pub-status" id="btn-publish" type="button" hidden></button>
+      <a class="small pub-site" id="publish-site" href="#" target="_blank" rel="noopener noreferrer" title="공개 사이트 열기" hidden>열기 ↗</a>
       <span class="spacer"></span>
       <button class="btn ghost" id="btn-rules">금지어 관리</button>
       <button class="btn ghost" id="btn-sources">출처 상태</button>
@@ -56,7 +58,7 @@
       <div class="sorts" id="sorts" role="tablist" aria-label="정렬">
         <button data-sort="new" role="tab">최신순</button>
         <button data-sort="hot" role="tab">인기순</button>
-        <button data-sort="shorts" role="tab" title="썰·대화·반응처럼 읽어주기 좋은 글 먼저">쇼츠추천순</button>
+        <button data-sort="shorts" role="tab" title="썰·대화·반응처럼 읽어주기 좋은 글 먼저" hidden>쇼츠추천순</button>
       </div>
     </div>
     <div class="stage-filter" id="stage-filter" hidden>

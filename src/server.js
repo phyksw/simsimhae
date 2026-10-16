@@ -6,15 +6,17 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { config, ROOT } from './config.js';
 import * as store from './store.js';
-import { isPending, isPublic, groupIndex, groupKey, onePerGroup } from './store.js';
+import { isPending, isPublic, groupIndex } from './store.js';
 import { loadSources, getSource } from './sources/index.js';
 import { crawlNow, events, liveState, setLive, activeSources, isRunning, rescoreAll, rescorePost, currentMedians } from './crawler.js';
 import { startScheduler } from './crawler.js';
 import { readPost, forgetCached } from './reader.js';
 import { fetchRaw } from './lib/http.js';
 import { hostMatches } from './lib/util.js';
-import { classify, getCustomRules, saveCustomRules, vibeGuess } from './filter.js';
+import { classify, getCustomRules, saveCustomRules } from './filter.js';
 import { aiStatus } from './ai.js';
+import { boardPosts, sortPosts, vibeOf, storyWorthy, alsoOnOf, sourceShown } from './boards.js';
+import { publishNow, publishStatus, schedulePublish, startPublisher, publishEvents } from './publish.js';
 
 store.load();
 const app = express();
@@ -186,59 +188,8 @@ function requireJson(req, res, next) {
   next();
 }
 
-// ---------- 게시판 ----------
-
-/** 웃긴 것만(pick): 공개 글 중 "그냥 웃긴" 글. Claude 판정이 있으면 그걸, 없으면 키워드 점수를 본다. */
-export const PICK_MIN = 65;
-const PICK_DAYS = 7;
-function pickWorthy(p) {
-  if (Date.now() - new Date(p.firstSeenAt).getTime() > PICK_DAYS * 864e5) return false;
-  if (p.manual === 'ok' && p.shorts) return true;
-  if (p.ai) return p.ai.verdict === 'ok' && p.ai.shortsScore >= PICK_MIN;
-  return (p.shortsScore ?? 0) >= PICK_MIN - 5;
-}
-
-/** 글의 "썰·대화" 분위기 점수: 관리자 지정 > Claude 판정(ai.vibe) > 제목 어림값 */
-function vibeOf(p) {
-  if (p.manualVibe === true) return 100;
-  if (p.manualVibe === false) return 0;
-  return typeof p.ai?.vibe === 'number' ? p.ai.vibe : vibeGuess(p);
-}
-/** 썰·대화(story): 운영자가 보여준 쇼츠처럼 읽어주며 반응하기 좋은 웃긴 글 */
-export const STORY_VIBE_MIN = 70;
-const STORY_FUNNY_MIN = 55;
-function storyWorthy(p) {
-  if (Date.now() - new Date(p.firstSeenAt).getTime() > PICK_DAYS * 864e5) return false;
-  if (p.manualVibe === true) return true;
-  if (p.manualVibe === false) return false;
-  if (p.ai) return p.ai.verdict === 'ok' && p.ai.shortsScore >= STORY_FUNNY_MIN && vibeOf(p) >= STORY_VIBE_MIN;
-  return (p.shortsScore ?? 0) >= STORY_FUNNY_MIN && vibeOf(p) >= 60;
-}
-
-/**
- * 게시판의 글 목록 (검색·정렬 전). /api/posts 의 total 과 /api/meta 의 boardCounts·sources[].count 가 모두 이 함수로 센다.
- * - 전체·픽·므흣: 중복 묶음마다 하나만. 대표 글이 보이면 대표 글이, 대표 글이 안 보이면(차단·대기·므흣) 보이는 사본이 대신 나온다.
- * - 출처별: 그 출처의 공개 글 전부 (각 글의 상태로만 판단)
- * @returns {import('./store.js').Post[]|null} 볼 권한이 없으면 null
- */
-function boardPosts(board, { admin = false, adult = false, stage = '' } = {}, all = store.allPosts()) {
-  switch (board) {
-    case 'all':
-      return onePerGroup(all.filter(isPublic));
-    case 'pick':
-      return onePerGroup(all.filter(isPublic)).filter(pickWorthy);
-    case 'story':
-      return onePerGroup(all.filter(isPublic)).filter(storyWorthy);
-    case 'adult':
-      return adult ? onePerGroup(all.filter((p) => p.status === 'adult' && !isPending(p))) : null;
-    case 'filtered':
-      return admin ? all.filter((p) => p.status === 'blocked' || isPending(p)) : null;
-    case 'shorts':
-      return admin ? all.filter((p) => p.shorts && (!stage || p.shorts.stage === stage)) : null;
-    default:
-      return all.filter((p) => p.source === board && isPublic(p));
-  }
-}
+// ---------- 게시판 (소속·정렬 기준은 boards.js — 공개 사이트 스냅샷과 같이 쓴다) ----------
+export { PICK_MIN, STORY_VIBE_MIN } from './boards.js';
 
 // ---------- 직렬화 ----------
 function serialize(p, { admin, groups }) {
@@ -256,9 +207,7 @@ function serialize(p, { admin, groups }) {
     status: p.status,
     shortsScore: p.shortsScore ?? 0,
     // 같은 묶음의 다른 글 중 이 글과 같은 상태로 보이는 것 (Claude 검수 대기 중인 사본은 빼고)
-    alsoOn: (groups?.get(groupKey(p)) || [])
-      .filter((d) => d.id !== p.id && d.status === p.status && !isPending(d))
-      .map((d) => ({ source: d.source, url: d.url })),
+    alsoOn: alsoOnOf(p, groups),
   };
   if (admin) {
     Object.assign(o, {
@@ -277,38 +226,6 @@ function serialize(p, { admin, groups }) {
     });
   }
   return o;
-}
-
-const ts = (p) => new Date(p.postedAt || p.firstSeenAt).getTime() || 0;
-
-function sortPosts(posts, sort) {
-  if (sort === 'shorts') return posts.sort((a, b) => (b.shortsScore ?? 0) - (a.shortsScore ?? 0) || ts(b) - ts(a));
-  if (sort === 'hot') {
-    // 같은 출처 안에서의 반응 순위(백분위)에 시간 감쇠를 곱한다
-    const bySrc = new Map();
-    const metric = (p) => p.likes ?? p.commentCount ?? p.views ?? null;
-    for (const p of posts) {
-      if (!bySrc.has(p.source)) bySrc.set(p.source, []);
-      bySrc.get(p.source).push(p);
-    }
-    const pct = new Map();
-    for (const arr of bySrc.values()) {
-      const vals = arr.map(metric).filter((v) => v != null).sort((a, b) => a - b);
-      for (const p of arr) {
-        const v = metric(p);
-        if (v == null || !vals.length) pct.set(p.id, 0.3);
-        else {
-          let lo = 0;
-          while (lo < vals.length && vals[lo] < v) lo++;
-          pct.set(p.id, vals.length > 1 ? lo / (vals.length - 1) : 0.5);
-        }
-      }
-    }
-    const now = Date.now();
-    const score = (p) => pct.get(p.id) * Math.exp(-Math.max(0, now - ts(p)) / (36 * 3600e3));
-    return posts.sort((a, b) => score(b) - score(a));
-  }
-  return posts.sort((a, b) => ts(b) - ts(a));
 }
 
 // ---------- 공개 API ----------
@@ -331,6 +248,7 @@ app.get(
       boardCounts.shorts = count('shorts');
     }
     const lv = liveState();
+    const publish = admin ? await publishStatus() : null;
     res.json({
       siteName: config.siteName,
       pickCount: boardCounts.pick,
@@ -342,7 +260,7 @@ app.get(
       // 그 글들은 전체 게시판에 계속 나오므로, 빼면 화면의 출처 배지·"같은 글:" 배지가 이름 대신 id 로 보인다.
       sources: sources
         .map((s) => ({ s, n: count(s.id) }))
-        .filter(({ s, n }) => admin || active.has(s.id) || n > 0)
+        .filter(({ s, n }) => sourceShown(s.id, active, n, admin))
         .map(({ s, n }) => ({
           id: s.id,
           name: s.name,
@@ -365,6 +283,8 @@ app.get(
               shorts: posts.filter((p) => p.shorts).length,
             },
             secretsFile: config.secretsFile,
+            // 공개 사이트(Cloudflare Worker) 업로드 상태
+            publish,
           }
         : {}),
     });
@@ -411,6 +331,7 @@ app.get(
     if (data.statusChanged) {
       rescorePost(fresh);
       store.upsertPost(fresh);
+      schedulePublish(); // 공개 사이트에서도 곧 빠지거나 옮겨지게
     }
     // 본문 검사로 상태가 바뀌어 이제 볼 수 없게 됐다면 막는다
     if (!admin && (fresh.status === 'blocked' || (fresh.status === 'adult' && !isAdult(req)))) {
@@ -464,6 +385,8 @@ events.on('state', (s) => {
   broadcast('live', { live: s.live, lastCrawlAt: s.lastCrawlAt });
   broadcast('state', s, true);
 });
+// 공개 사이트 업로드 시작·끝 (관리자 바의 반영 상태)
+publishEvents.on('state', (s) => broadcast('publish', s, true));
 setInterval(() => {
   for (const c of clients) c.res.write(': ping\n\n');
 }, 25e3).unref();
@@ -514,6 +437,7 @@ app.post('/api/admin/posts/:id', requireJson, requireAdmin, (req, res) => {
   store.upsertPost(p);
   store.saveNow(); // 관리자 지정은 바로 저장 (곧바로 서버를 꺼도 남게)
   forgetCached(p.id);
+  schedulePublish();
   res.json({ ok: true, post: serialize(p, { admin: true, groups: groupIndex(store.allPosts()) }) });
 });
 
@@ -584,6 +508,7 @@ app.post('/api/admin/verdicts', requireJson, requireAdmin, (req, res) => {
   }
   rescoreAll();
   store.saveNow();
+  if (applied) schedulePublish();
   res.json({ applied, skipped });
 });
 
@@ -648,7 +573,21 @@ app.post(
     const rules = saveCustomRules(req.body || {});
     // 바뀐 규칙으로 모든 글을 다시 판정
     const changed = await rejudgeAll();
+    if (changed) schedulePublish();
     res.json({ rules, changed });
+  }),
+);
+
+// 공개 사이트(Cloudflare Worker)로 지금 올리기. 오래 걸릴 수 있어 바로 202 로 답하고, 결과는 /api/meta 의 publish 로 본다.
+app.post(
+  '/api/admin/publish',
+  requireJson,
+  requireAdmin,
+  wrap(async (req, res) => {
+    const st = await publishStatus();
+    if (!st.enabled) return res.status(409).json({ error: st.lastError || '공개 사이트 업로드가 꺼져 있어요 (.env 의 PUBLISH_URL·PUBLISH_TOKEN)' });
+    publishNow({ force: true });
+    res.status(202).json({ started: !st.running, running: true });
   }),
 );
 
@@ -816,6 +755,8 @@ app.get(
 );
 
 // ---------- 정적 파일 ----------
+// public/_headers 는 Cloudflare(공개 사이트) 설정 파일이라 화면 파일이 아니다 (공개 사이트에서도 내려가지 않음)
+app.use('/_headers', (req, res) => res.status(404).end());
 app.use(express.static(path.join(ROOT, 'public'), { extensions: ['html'], maxAge: '5m' }));
 app.use('/api', (req, res) => res.status(404).json({ error: 'not found' }));
 
@@ -854,4 +795,5 @@ const server = app.listen(config.port, config.host, () => {
   console.log(`  (비밀번호는 ${config.secretsFile} 또는 .env 에서 바꿀 수 있어요. 바꾸고 다시 시작하면 기존 로그인은 풀려요)`);
   console.log(`  Claude 검수: ${config.ai.enabled ? `켜짐 (${config.ai.model})` : '꺼짐 — .env 에 ANTHROPIC_API_KEY 를 넣으면 켜져요'}\n`);
   startScheduler();
+  startPublisher(); // 공개 사이트 업로드: 지금 한 번, 그 뒤로는 수집이 끝날 때마다
 });

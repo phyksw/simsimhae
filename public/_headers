@@ -1,0 +1,6 @@
+# Cloudflare Workers 정적 파일(public/)의 응답 헤더 — 로컬 서버(src/server.js)와 같은 보안 헤더.
+# /api/* 는 Worker 가 직접 붙인다(worker/http.js). 이 파일 자체는 주소로 내려가지 않는다.
+/*
+  Content-Security-Policy: default-src 'self'; img-src 'self' data: https:; media-src 'self' https:; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://streamable.com https://clips.twitch.tv; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff

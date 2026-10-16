@@ -101,4 +101,39 @@ export const config = {
     // 한 글을 판정 실패로 다시 보내는 최대 횟수 (그 뒤로는 키워드 판정만 쓰고 검수 대기열(/api/admin/review-queue)에 남김)
     maxTries: num(process.env.AI_MAX_TRIES, 6),
   },
+
+  // 공개 사이트(Cloudflare Worker)로 올리기 (src/publish.js, worker/CONTRACT.md). PUBLISH_URL·PUBLISH_TOKEN 이 둘 다 있을 때만 켜짐.
+  publish: publishConfig(),
 };
+
+/**
+ * 공개 사이트 업로드 설정. 주소는 https 만(이 컴퓨터 안의 시험용 주소는 http 허용) — 토큰이 평문으로 나가지 않게.
+ * 테스트(node --test) 안에서는 이 컴퓨터 안의 주소로만 올린다: .env 에 진짜 주소가 있어도 시험 데이터가 공개 사이트에 올라가지 않게.
+ */
+function publishConfig() {
+  const raw = String(process.env.PUBLISH_URL || '').trim();
+  const token = String(process.env.PUBLISH_TOKEN || '').trim();
+  const out = {
+    url: '',
+    token,
+    enabled: false,
+    error: null, // 켜려고 했지만 설정이 잘못된 경우의 설명
+    readLimit: Math.max(0, Math.min(500, Math.floor(num(process.env.PUBLISH_READ_LIMIT, 40)))), // 한 번에 새로 만들 미리보기 수
+    debounceMs: Math.max(0, num(process.env.PUBLISH_DEBOUNCE_SEC, 30)) * 1000, // 관리자 변경 뒤 이 시간 안에 한 번 올림
+  };
+  if (!raw) return token ? { ...out, error: 'PUBLISH_URL 이 비어 있어요' } : out;
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    return { ...out, error: 'PUBLISH_URL 주소 형식이 잘못됐어요' };
+  }
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && local)) return { ...out, error: 'PUBLISH_URL 은 https:// 주소여야 해요' };
+  if (u.username || u.password || u.search || u.hash) return { ...out, error: 'PUBLISH_URL 에는 주소만 넣어 주세요 (토큰은 PUBLISH_TOKEN 에)' };
+  out.url = `${u.origin}${u.pathname.replace(/\/+$/, '')}`;
+  if (!token) return { ...out, error: 'PUBLISH_TOKEN 이 비어 있어요' };
+  if (process.env.NODE_TEST_CONTEXT && !local) return { ...out, error: '테스트 중에는 공개 사이트로 올리지 않아요' };
+  out.enabled = true;
+  return out;
+}

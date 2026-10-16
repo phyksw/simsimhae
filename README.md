@@ -64,13 +64,65 @@ npm start
 
 일간베스트·루리웹·메갈리아·워마드는 의도적으로 수집하지 않습니다.
 
+## 공개 사이트 (Cloudflare Workers, 무료)
+
+수집·판정·관리자 기능은 지금처럼 **내 컴퓨터**(`npm start`)에서 돌고, 방문자에게 보일 결과만 **Cloudflare Worker** 로 올립니다.
+Worker 는 읽기 전용 사이트라 관리자 기능·수집·실시간 연결이 없고, 내 컴퓨터 서버는 `127.0.0.1` 그대로 두면 됩니다.
+주고받는 형식은 `worker/CONTRACT.md` 에 있습니다.
+
+```
+내 컴퓨터 (npm start)  ── 수집·판정 → 결과 PUT (Bearer 토큰) ──▶  Worker (simsimhae)  ◀── 방문자
+```
+
+### 주소
+
+`https://simsimhae.<workers.dev 서브도메인>.workers.dev` — 워커 이름이 `simsimhae`, 뒤쪽은 Cloudflare 계정의 workers.dev 서브도메인입니다
+(지금은 `palebluedot13` → `https://simsimhae.palebluedot13.workers.dev`. 주소는 `worker.dev` 가 아니라 `workers.dev` 예요).
+
+서브도메인을 `board` 로 바꾸면 `https://simsimhae.board.workers.dev` 가 됩니다. Cloudflare 대시보드의 **Workers & Pages** 화면에서
+계정의 workers.dev **Subdomain** 항목을 바꾸면 돼요(계정에 로그인해서 직접 하는 일이라 이 프로젝트가 대신하지 않습니다).
+
+- 서브도메인은 Cloudflare 전체에서 하나뿐이라 `board` 를 이미 누가 쓰고 있으면 고를 수 없어요. 그때는 다른 이름을 고르세요.
+- 계정 전체의 주소가 바뀝니다. 예전 `…palebluedot13.workers.dev` 주소는 더는 열리지 않아요.
+- 바꾼 뒤에는 `.env` 의 `PUBLISH_URL` 도 새 주소로 바꾸고 서버를 다시 켜세요.
+
+### 처음 한 번
+
+1. **Worker 만들기** — 둘 중 하나. D1 저장소(`simsimhae`)는 첫 배포 때 저절로 만들어지거나 같은 이름의 것에 연결됩니다(`wrangler.jsonc` 에 id 를 넣지 않아도 돼요).
+   - **GitHub 에 연결해 자동 배포**: 이 폴더를 `phyksw/simsimhae` 저장소에 올린 뒤, Cloudflare 대시보드 → **Workers & Pages** → **Create** → **Import a repository** → `phyksw/simsimhae`.
+     Worker 이름 `simsimhae`(`wrangler.jsonc` 의 `name` 과 같게), 빌드 명령은 비우고, 배포 명령 `npx wrangler deploy`, 루트 `/`. 그 뒤로는 `main` 에 올릴 때마다 다시 배포돼요.
+     첫 빌드가 D1 을 만들지 못했다고 나오면 대시보드 **Storage & Databases → D1** 에서 `simsimhae` 를 직접 만들고 다시 배포하세요.
+   - **이 컴퓨터에서 직접**: `npx wrangler login` → `npm run worker:deploy`.
+2. **비밀 3개** — 대시보드 `simsimhae` → **Settings → Variables and Secrets** 에서 종류 *Secret* 으로, 또는 `npx wrangler secret put <이름>`:
+   - `PUBLISH_TOKEN`: 긴 무작위 문자열. 예: `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`
+   - `ADULT_PASSWORD`: 므흣 게시판 비밀번호 (`data/secrets.json` 의 `adultPassword` 와 같게), `SESSION_SECRET`: 아무 긴 무작위 문자열
+3. (원하면) 위 **주소** 대로 서브도메인을 `board` 로 바꿉니다.
+4. `.env` 에 `PUBLISH_URL`(예: `https://simsimhae.board.workers.dev`)·`PUBLISH_TOKEN`(Worker 비밀과 같은 값)을 넣고 `npm start`. 둘 다 있어야 켜집니다.
+5. 관리자 바의 **공개 사이트** 표시에서 마지막 반영 시각·오류를 보고, 누르면 지금 올립니다.
+
+배포 전에 이 컴퓨터에서만 미리 보려면 `worker/README.md` 의 "로컬 시험"(`npm run worker:dev`, 비밀은 `.dev.vars`)을 보세요.
+
+### 무엇을 언제 올리나
+
+- **언제**: 서버를 켤 때, 수집이 끝날 때마다, 관리자가 글 상태·금지어·검수 결과를 바꾸면 30초 안에 한 번, 관리자 바에서 누를 때.
+  한 번에 하나만 돌고, 도는 중에 또 요청이 오면 끝난 뒤 한 번 더 돕니다. 실패하면 서버는 그대로 돌고 5분 뒤(또는 다음 수집 때) 다시 올려요.
+- **목록**: 공개 글과 므흣 글 목록. 게시판 소속(썰·대화/웃긴 것만/전체/출처별/므흣)과 인기순 점수는 내 컴퓨터가 계산해서 올리므로
+  공개 사이트의 게시판 글 수가 여기와 같습니다. 걸러진 글·검수 대기 글, 쇼츠 점수·후보함·Claude 판정 같은 관리자 정보는 올리지 않습니다.
+- **미리보기**: 아직 안 올렸거나 제목이 바뀐 글의 본문을 원문에서 가져와(이 컴퓨터의 미리보기와 같은 방식) 올립니다.
+  출처 사이트 부담을 생각해 한 번에 `PUBLISH_READ_LIMIT`(기본 40)개만, 한 개씩 차례로 가져오고, 썰·대화 → 웃긴 것만 → 전체 → 므흣 순서로 채웁니다.
+  수집을 끈 출처의 글은 자동으로 가져오지 않고, 원문을 못 읽은 글은 점점 늦게 몇 번만 다시 시도합니다. 미리보기가 없는 글은 공개 사이트에서 원문 링크로 안내돼요.
+  본문 검사로 걸러진 글은 올리지 않고 목록에서도 빠집니다.
+- 내 컴퓨터가 꺼져 있으면 공개 사이트는 마지막으로 올린 상태 그대로 보입니다(새 글만 안 들어옴).
+- `npm test` 는 `.env` 에 공개 사이트 주소가 있어도 공개 사이트로 올리지 않습니다(테스트 중에는 이 컴퓨터 안의 주소로만).
+
 ## 운영 전에 꼭 확인할 것
 
 - **저작권**: 글·이미지의 저작권은 원작성자와 원 사이트에 있습니다. 이 사이트는 제목과 링크를 기본으로 보여주고, 미리보기는 요청할 때 원문에서 가져와 잠시 캐시만 합니다(저장하지 않음). 쇼츠에서 글을 읽어줄 때도 출처를 밝히고, 원작자가 삭제를 요청하면 따르는 게 안전합니다.
 - **각 사이트의 이용약관과 robots.txt**: 일부 사이트는 자동 수집을 금지합니다. 출처별 상태와 robots.txt 조사 결과를 보고 쓸 소스를 고르세요(`SOURCES` / `DISABLE_SOURCES`).
 - **요청 간격**: 같은 사이트에 1.2초 이상 간격을 두고, 사이트당 목록 2페이지만 가져옵니다. 수집 간격을 너무 짧게 하지 마세요.
 - **잠금 게시판**: 비밀번호는 서버에서 확인하고, 잠긴 상태에서는 므흣 글 목록 자체를 보내지 않습니다. 성인 인증을 대신하지는 않으니 공개 운영 시 연령 확인 방식을 따로 고려하세요.
-- **외부 공개**: 기본은 내 컴퓨터에서만 열리는 `127.0.0.1` 입니다. 외부에 열려면 `HOST=0.0.0.0` 과 HTTPS 리버스 프록시를 쓰세요.
+- **외부 공개**: 기본은 내 컴퓨터에서만 열리는 `127.0.0.1` 입니다. 위의 **공개 사이트(Cloudflare Workers)** 로 공개하면 이 서버를 외부에 열 필요가 없어요.
+  이 서버를 직접 외부에 열려면 `HOST=0.0.0.0` 과 HTTPS 리버스 프록시를 쓰세요.
   - 프록시가 `X-Forwarded-For`·`X-Forwarded-Proto` 를 넘기게 하고, 프록시가 같은 컴퓨터가 아니면 `TRUST_PROXY` 에 그 주소를 넣으세요(기본 `loopback`). 그래야 비밀번호 시도 제한·이미지 프록시 제한이 방문자마다 따로 걸립니다.
   - 인증 쿠키의 `Secure` 는 HTTPS 요청일 때만 붙습니다. `COOKIE_SECURE=1` 이면 항상, `0` 이면 붙이지 않습니다.
   - 이미지 프록시(`/api/img`)는 접속자당 분당 요청 수·동시 연결 수·응답 크기를 제한합니다(`IMG_RATE_PER_MIN`, `IMG_MAX_CONCURRENT`, `IMG_MAX_CONCURRENT_PER_IP`, `IMG_MAX_BYTES`). 넘으면 429·413 을 돌려줍니다.

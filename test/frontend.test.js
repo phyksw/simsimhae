@@ -306,6 +306,7 @@ class FDocument extends FNode {
     this._win = win;
     this.children = [];
     this.title = '';
+    this.visibilityState = 'visible'; // 테스트가 'hidden' 으로 바꾸고 visibilitychange 를 보낸다
     const parsed = convert(this, parseDocument(html).children);
     for (const n of parsed) {
       n.parent = this;
@@ -435,6 +436,12 @@ function makeServer({ posts = makePosts(100), admin = false, adult = false, meta
         return { status: 200, body: { ok: true } };
       }
       if (p === '/api/admin/rules') return { status: 200, body: { ...s.rules, changed: 0 } };
+      if (p === '/api/admin/publish') {
+        if (!s.admin) return { status: 401, body: { error: '관리자 전용' } };
+        if (s.onPublish) return s.onPublish();
+        s.extraMeta.publish = { ...s.extraMeta.publish, lastOkAt: new Date().toISOString(), lastError: null, running: false };
+        return { status: 200, body: { ok: true } };
+      }
       let m = /^\/api\/admin\/posts\/(.+)$/.exec(p);
       if (m) {
         const post = s.posts.find((x) => x.id === decodeURIComponent(m[1]));
@@ -462,6 +469,7 @@ function makeServer({ posts = makePosts(100), admin = false, adult = false, meta
 const HOOK = `globalThis.__app = {
   state, loadPosts, route, go, hashOf, parseHash, freshFor, promptPassword, unlockAdult, openReader, closeOverlay,
   renderReaderAdmin, renderBoards, adminUpdate, connectEvents, shownRows,
+  loadMeta, pollPublic, publishInfo, renderPublish,
 };
 `;
 
@@ -992,4 +1000,269 @@ test('frontend(통합): counts.bySource 에 없는 출처 게시판은 새 글 0
   assert.deepEqual({ ...t.app.freshFor(payload) }, { n: 2, exact: false });
   t.app.state.board = 'all';
   assert.deepEqual({ ...t.app.freshFor(payload) }, { n: 3, exact: true });
+});
+
+// ================================================================ 공개 사이트(Worker) 모드 / 공개 사이트 반영 상태
+const metaCount = (t) => t.server.requests.filter((r) => r.path === '/api/meta').length;
+const publicServer = (lastCrawlAt, extra = {}) => makeServer({ meta: { mode: 'public', live: { live: true, lastCrawlAt }, ...extra } });
+
+test('frontend(공개): 관리자 버튼·바를 숨기고 SSE 를 열지 않으며, 갱신 표시는 중립적으로', async () => {
+  const server = publicServer(new Date(Date.now() - 5 * 60e3).toISOString());
+  const t = await boot({ hash: '#/b/all', server });
+  assert.equal(t.$('#btn-admin').hidden, true, '👤 버튼 숨김');
+  assert.equal(t.$('#adminbar').hidden, true, '관리자 바 숨김');
+  assert.equal(t.$('#btn-publish').hidden, true);
+  assert.equal(t.sources.length, 0, '/api/events 를 열지 않는다');
+  const pill = t.$('#live-pill');
+  assert.equal(pill.hidden, false);
+  assert.equal(t.$('#live-pill .txt').textContent, '5분 전 갱신');
+  assert.ok(pill.classList.contains('public'));
+  assert.ok(!pill.classList.contains('on'), '빨간 실시간 표시를 쓰지 않는다');
+  assert.match(pill.title, /^마지막 갱신 /);
+  assert.equal(t.rowIds().length, 30, '목록은 그대로');
+  assert.equal(t.$('#sorts button[data-sort="shorts"]').hidden, true, '쇼츠추천순 정렬도 없다');
+  // 혹시 눌려도 로그인 창을 띄우지 않는다
+  t.$('#btn-admin').click();
+  await t.clock.advance(50);
+  assert.equal(t.$('#pw-modal').hidden, true);
+  // 아직 수집 기록이 없으면 표시하지 않는다
+  const empty = await boot({ server: publicServer(null) });
+  assert.equal(empty.$('#live-pill').hidden, true);
+});
+
+test('frontend(공개): 2분마다 /api/meta 를 다시 받아 lastCrawlAt 이 바뀌면 숫자 없는 새 글 배너', async () => {
+  const server = publicServer(new Date(Date.now() - 5 * 60e3).toISOString());
+  const t = await boot({ hash: '#/b/all', server, scrollY: 1000 });
+  const before = metaCount(t);
+  await t.clock.advance(119e3);
+  assert.equal(metaCount(t), before, '2분 전에는 받지 않는다');
+  await t.clock.advance(1e3);
+  assert.equal(metaCount(t), before + 1);
+  assert.equal(t.$('#new-banner').hidden, true, '같은 수집이면 배너 없음');
+
+  server.extraMeta.live = { live: true, lastCrawlAt: new Date().toISOString() };
+  server.extraMeta.boardCounts = { story: 1, pick: 1, all: 101 };
+  await t.clock.advance(120e3);
+  assert.equal(metaCount(t), before + 2);
+  assert.equal(t.$('#new-banner').hidden, false);
+  assert.equal(t.$('#new-banner').textContent, '새 글이 있어요 — 눌러서 보기');
+  assert.equal(t.$('#live-pill .txt').textContent, '방금 갱신', '갱신 표시도 새 시각으로');
+  assert.equal(t.$('#boards a[href="#/b/all"] .count').textContent, '101', '칩 숫자도 새 메타로');
+  assert.equal(t.sources.length, 0);
+
+  // 눌러서 보면 목록을 다시 받고 배너를 닫는다. 같은 수집으로는 다시 뜨지 않는다
+  const loads = t.postRequests().length;
+  t.$('#new-banner').click();
+  await t.clock.advance(0);
+  assert.equal(t.postRequests().length, loads + 1);
+  assert.equal(t.$('#new-banner').hidden, true);
+  await t.clock.advance(120e3);
+  assert.equal(metaCount(t), before + 3);
+  assert.equal(t.$('#new-banner').hidden, true);
+
+  // 다른 게시판으로 옮겨 목록을 새로 받은 뒤에는 그 수집은 이미 본 것
+  server.extraMeta.live = { live: true, lastCrawlAt: new Date(Date.now() + 1000).toISOString() };
+  await t.app.loadMeta();
+  await t.setHash('#/b/dogdrip');
+  await t.clock.advance(120e3);
+  assert.equal(t.$('#new-banner').hidden, true);
+
+  // 메타를 못 받아도 다음 차례에 다시 시도한다
+  const realHandle = server.handle;
+  server.handle = async (u, m, b) => (u.pathname === '/api/meta' ? { status: 500, body: { error: '잠시 오류' } } : realHandle(u, m, b));
+  await t.clock.advance(120e3);
+  server.handle = realHandle;
+  server.extraMeta.live = { live: true, lastCrawlAt: new Date(Date.now() + 2000).toISOString() };
+  await t.clock.advance(120e3);
+  assert.equal(t.$('#new-banner').hidden, false, '오류 뒤에도 계속 확인');
+});
+
+test('frontend(공개): 탭이 숨겨져 있으면 쉬었다가, 돌아오면 한 번만 확인', async () => {
+  const server = publicServer('2026-10-17T00:00:00.000Z');
+  const t = await boot({ hash: '#/b/all', server, scrollY: 1000 });
+  const before = metaCount(t);
+  t.doc.visibilityState = 'hidden';
+  t.doc.dispatchEvent(new FakeEvent('visibilitychange'));
+  server.extraMeta.live = { live: true, lastCrawlAt: '2026-10-17T00:15:00.000Z' };
+  await t.clock.advance(10 * 60e3);
+  assert.equal(metaCount(t), before, '숨겨진 동안은 받지 않는다');
+  assert.equal(t.$('#new-banner').hidden, true);
+
+  t.doc.visibilityState = 'visible';
+  t.doc.dispatchEvent(new FakeEvent('visibilitychange'));
+  await t.clock.advance(0);
+  assert.equal(metaCount(t), before + 1, '돌아오면 바로 한 번');
+  assert.equal(t.$('#new-banner').hidden, false);
+  assert.equal(t.$('#new-banner').textContent, '새 글이 있어요 — 눌러서 보기');
+
+  // 잠깐 숨겼다 2분이 지나기 전에 돌아오면 추가로 받지 않는다
+  t.doc.visibilityState = 'hidden';
+  t.doc.dispatchEvent(new FakeEvent('visibilitychange'));
+  await t.clock.advance(30e3);
+  t.doc.visibilityState = 'visible';
+  t.doc.dispatchEvent(new FakeEvent('visibilitychange'));
+  await t.clock.advance(0);
+  assert.equal(metaCount(t), before + 1, '확인 차례가 지나가지 않았으면 그대로');
+  await t.clock.advance(90e3);
+  assert.equal(metaCount(t), before + 2, '그 뒤로 다시 2분마다');
+});
+
+test('frontend(공개): 미리보기 404 에 url 이 오면 준비 중 안내와 원문 보기 버튼', async () => {
+  const server = publicServer(new Date().toISOString());
+  server.readDeferred = () => ({ status: 404, body: { error: '미리보기를 준비 중이에요', url: 'https://example.invalid/origin-p0' } });
+  const t = await boot({ hash: '#/b/all', server });
+  const p = server.list('all')[0];
+  t.app.openReader(p);
+  await t.clock.advance(0);
+  assert.equal(t.$('#reader').hidden, false);
+  assert.equal(t.$('#reader-body .notice').textContent, '미리보기를 준비 중이에요');
+  const a = t.$('#reader-body a.btn');
+  assert.equal(a.getAttribute('href'), 'https://example.invalid/origin-p0');
+  assert.equal(a.textContent, '원문 보기 ↗');
+  assert.equal(a.getAttribute('target'), '_blank');
+  assert.equal(a.getAttribute('rel'), 'noopener noreferrer');
+  assert.equal(t.$('#reader-comments').hidden, true);
+  t.app.closeOverlay(t.$('#reader'));
+  await t.clock.advance(0);
+
+  // http(s) 가 아닌 주소는 쓰지 않고 글 주소로
+  server.readDeferred = () => ({ status: 404, body: { error: '미리보기를 준비 중이에요', url: 'javascript:alert(1)' } });
+  t.app.openReader(p);
+  await t.clock.advance(0);
+  assert.equal(t.$('#reader-body a.btn').getAttribute('href'), p.url);
+  t.app.closeOverlay(t.$('#reader'));
+  await t.clock.advance(0);
+
+  // url 이 없는 404 는 예전처럼 서버 문구 + 원문 링크
+  server.readDeferred = () => ({ status: 404, body: { error: '글을 찾을 수 없어요' } });
+  t.app.openReader(p);
+  await t.clock.advance(0);
+  assert.equal(t.$('#reader-body .notice').textContent, '글을 찾을 수 없어요');
+  assert.match(t.$('#reader-body a.btn').textContent, /원문 사이트에서 보기/);
+});
+
+test('frontend(로컬): 모드가 없으면 예전처럼 관리자 버튼·실시간 표시·SSE, 주기적 메타 확인 없음', async () => {
+  const t = await boot({ hash: '#/b/all' });
+  assert.equal(t.$('#btn-admin').hidden, false);
+  assert.equal(t.$('#live-pill').hidden, false);
+  assert.equal(t.$('#live-pill .txt').textContent, '일시정지');
+  assert.ok(!t.$('#live-pill').classList.contains('public'));
+  assert.equal(t.sources.length, 1);
+  assert.equal(t.sources[0].url, '/api/events');
+  const before = metaCount(t);
+  await t.clock.advance(10 * 60e3);
+  assert.equal(metaCount(t), before, '로컬은 SSE 로 알림을 받으므로 메타를 주기적으로 받지 않는다');
+  assert.equal(t.$('#btn-publish').hidden, true, '관리자가 아니면 반영 상태 없음');
+  // mode: "local" 도 같다
+  const local = await boot({ server: makeServer({ meta: { mode: 'local' } }) });
+  assert.equal(local.$('#btn-admin').hidden, false);
+  assert.equal(local.sources.length, 1);
+});
+
+test('frontend(로컬 관리자): 관리자 바에 공개 사이트 반영 상태, 누르면 지금 올리기', async () => {
+  const at = new Date(Date.now() - 3 * 60e3).toISOString();
+  // src/publish.js 의 publishStatus() 모양 그대로
+  const server = makeServer({ admin: true, meta: { publish: { enabled: true, url: 'https://simsimhae.example.invalid', lastOkAt: at, lastError: null, running: false, reads: { done: 40, pending: 3 } } } });
+  const t = await boot({ server });
+  const btn = t.$('#btn-publish');
+  assert.equal(t.$('#adminbar').hidden, false);
+  assert.equal(t.$('#sorts button[data-sort="shorts"]').hidden, false, '처음엔 숨겨 둔 쇼츠추천순 정렬이 관리자에겐 보인다');
+  assert.equal(btn.hidden, false);
+  assert.equal(btn.textContent, '공개 사이트: 마지막 반영 3분 전');
+  assert.ok(!btn.classList.contains('warn'));
+  assert.match(btn.title, /누르면 지금 올려요/);
+  assert.match(btn.title, /미리보기 40개 올림 · 3개 남음/);
+  assert.equal(t.$('#publish-site').hidden, false);
+  assert.equal(t.$('#publish-site').getAttribute('href'), 'https://simsimhae.example.invalid');
+
+  // 오류: 경고색 + title 에 오류
+  server.extraMeta.publish = { enabled: true, lastOkAt: at, lastError: { message: 'HTTP 401 (토큰 확인)', at: new Date().toISOString() } };
+  await t.app.loadMeta();
+  assert.ok(btn.classList.contains('warn'));
+  assert.match(btn.title, /HTTP 401 \(토큰 확인\)/);
+  assert.equal(btn.textContent, '⚠ 공개 사이트: 마지막 반영 3분 전');
+  // 오류 뒤에 다시 성공했으면 지난 오류는 보이지 않는다
+  assert.equal(t.app.publishInfo({ enabled: true, lastOkAt: '2026-10-17T01:00:00Z', lastError: { message: 'x', at: '2026-10-17T00:00:00Z' } }).error, null);
+  assert.equal(t.app.publishInfo({ enabled: true, lastError: '문자열 오류' }).error, '문자열 오류');
+
+  // 누르면 POST /api/admin/publish. 보내는 동안은 다시 누를 수 없다
+  let release;
+  server.onPublish = () =>
+    new Promise((resolve) => {
+      release = () => {
+        server.extraMeta.publish = { enabled: true, lastOkAt: new Date().toISOString(), lastError: null };
+        resolve({ status: 200, body: { ok: true, posts: 120 } });
+      };
+    });
+  btn.click();
+  await t.clock.advance(0);
+  assert.equal(btn.textContent, '공개 사이트: 올리는 중…');
+  assert.equal(btn.disabled, true);
+  btn.click();
+  await t.clock.advance(0);
+  const calls = server.requests.filter((r) => r.path === '/api/admin/publish');
+  assert.equal(calls.length, 1, '보내는 중에는 한 번만');
+  assert.equal(calls[0].method, 'POST');
+  release();
+  await t.clock.advance(0);
+  assert.equal(t.toastText(), '공개 사이트에 올렸어요');
+  assert.equal(btn.disabled, false);
+  assert.equal(btn.textContent, '공개 사이트: 마지막 반영 방금', '올린 뒤 메타를 다시 받아 반영');
+  assert.ok(!btn.classList.contains('warn'));
+
+  // 실패하면 이유를 알린다
+  server.onPublish = () => ({ status: 502, body: { error: '공개 사이트에 연결하지 못했어요' } });
+  btn.click();
+  await t.clock.advance(0);
+  assert.equal(t.toastText(), '공개 사이트에 올리지 못했어요: 공개 사이트에 연결하지 못했어요');
+  assert.equal(btn.disabled, false);
+
+  // 로컬 서버가 SSE 'publish' 를 보내면 바로 반영 (관리자만). 시작 알림은 일부 필드만 온다
+  const es = t.sources.at(-1);
+  es.emit('publish', { running: true, lastOkAt: at, lastError: null });
+  await t.clock.advance(0);
+  assert.equal(btn.textContent, '공개 사이트: 올리는 중…');
+  assert.equal(btn.hidden, false, '시작 알림에 enabled 가 없어도 그대로 보인다');
+  es.emit('publish', { enabled: true, url: 'https://simsimhae.example.invalid', lastOkAt: at, lastError: '용량 초과', running: false, reads: { done: 40, pending: 0 } });
+  await t.clock.advance(0);
+  assert.ok(btn.classList.contains('warn'));
+  assert.match(btn.title, /용량 초과/);
+  assert.equal(btn.textContent, '⚠ 공개 사이트: 마지막 반영 3분 전');
+});
+
+test('frontend(로컬 관리자): 올리는 중이면 끝날 때까지 메타를 다시 받고, 없거나 꺼져 있으면 표시하지 않는다', async () => {
+  const at = new Date(Date.now() - 20 * 60e3).toISOString();
+  const server = makeServer({ admin: true, meta: { publish: { enabled: true, running: true, lastOkAt: at } } });
+  const t = await boot({ server });
+  const btn = t.$('#btn-publish');
+  assert.equal(btn.textContent, '공개 사이트: 올리는 중…');
+  assert.equal(btn.disabled, true);
+  const before = metaCount(t);
+  server.extraMeta.publish = { enabled: true, running: false, lastOkAt: new Date().toISOString() };
+  await t.clock.advance(4000);
+  assert.equal(metaCount(t), before + 1);
+  assert.equal(btn.textContent, '공개 사이트: 마지막 반영 방금');
+  await t.clock.advance(60e3);
+  assert.equal(metaCount(t), before + 1, '끝나면 더 받지 않는다');
+
+  const none = await boot({ server: makeServer({ admin: true }) });
+  assert.equal(none.$('#btn-publish').hidden, true, 'meta.publish 가 없으면 표시하지 않는다');
+  assert.equal(none.$('#publish-site').hidden, true);
+  const off = await boot({ server: makeServer({ admin: true, meta: { publish: { enabled: false, lastOkAt: at } } }) });
+  assert.equal(off.$('#btn-publish').hidden, true, 'enabled false 면 표시하지 않는다');
+  const never = await boot({ server: makeServer({ admin: true, meta: { publish: { enabled: true } } }) });
+  assert.equal(never.$('#btn-publish').textContent, '공개 사이트: 아직 반영 전');
+  assert.equal(never.$('#publish-site').hidden, true, '주소가 없으면 열기 링크 없음');
+});
+
+test('frontend: 공개 모드·반영 상태 스타일이 있고, 관리자 버튼·실시간 표시는 처음엔 숨겨 둔다', () => {
+  const flat = CSS_SRC.replace(/\s+/g, ' ');
+  assert.match(flat, /\.live-pill\.public \{/);
+  assert.match(flat, /\.live-pill\.public \.dot \{ display: none; \}/);
+  assert.match(flat, /\.btn\.pub-status\.warn \{[^}]*var\(--warn\)/);
+  // 공개 사이트에서 메타를 받기 전에 잠깐 보이지 않게
+  assert.match(HTML_SRC, /id="btn-admin"[^>]*hidden/);
+  assert.match(HTML_SRC, /id="live-pill"[^>]*hidden/);
+  // 운영자용 정렬(쇼츠추천순)도 메타를 받기 전·메타를 못 받았을 때 방문자에게 보이지 않게
+  assert.match(HTML_SRC, /data-sort="shorts"[^>]*hidden/);
 });

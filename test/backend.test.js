@@ -151,6 +151,18 @@ test('잘못된 %-인코딩 쿠키로 서버가 죽거나 스택을 내보내지
   assert.equal(c.status, 200, '서버가 계속 살아 있어야 함');
 });
 
+test('정적 파일: Cloudflare 설정 파일(public/_headers)은 내려가지 않고 화면은 그대로', async () => {
+  const h = await api('/_headers');
+  assert.equal(h.status, 404);
+  assert.ok(!/Content-Security-Policy/.test(h.text));
+  const page = await api('/');
+  assert.equal(page.status, 200);
+  assert.match(page.text, /<script src="\/app\.js"/);
+  // 공개 사이트의 화면 파일도 이 서버와 같은 CSP 를 받는다 (public/_headers)
+  const rules = readFileSync(path.join(ROOT, 'public/_headers'), 'utf8');
+  assert.equal(/^\s+Content-Security-Policy:\s*(.+)$/m.exec(rules)?.[1].trim(), page.headers.get('content-security-policy'));
+});
+
 test('오류 응답은 JSON 이고 스택·경로가 없다', async () => {
   const r = await api('/api/lock', { body: '{' });
   assert.equal(r.status, 400);

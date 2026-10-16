@@ -8,7 +8,9 @@
     "start": "node src/server.js",
     "crawl": "node scripts/crawl-once.js",
     "test:source": "node scripts/test-source.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "worker:dev": "wrangler dev --local",
+    "worker:deploy": "wrangler deploy"
   },
   "engines": {
     "node": ">=20"
@@ -19,5 +21,8 @@
     "express": "^4.22.3",
     "iconv-lite": "^0.7.3",
     "sanitize-html": "^2.18.1"
+  },
+  "devDependencies": {
+    "wrangler": "^4.149.0"
   }
 }

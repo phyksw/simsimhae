@@ -106,6 +106,9 @@ code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-
 .live-pill.busy .dot { background: var(--warn); animation: pulse 0.8s infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 @media (prefers-reduced-motion: reduce) { .live-pill .dot { animation: none !important; } }
+/* 공개 사이트: "5분 전 갱신" 같은 중립 표시 (빨간 점·깜빡임 없음) */
+.live-pill.public { color: var(--text-2); background: var(--surface-2); font-weight: 600; }
+.live-pill.public .dot { display: none; }
 .search { flex: 1; min-width: 0; }
 .search input {
   width: 100%; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line);
@@ -163,6 +166,11 @@ code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-
 .src-card { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 12.5px; background: var(--surface-2); }
 .src-card .st-ok { color: var(--accent); font-weight: 700; }
 .src-card .st-bad { color: var(--danger); font-weight: 700; }
+/* 공개 사이트 반영 상태 (누르면 지금 올리기) */
+.btn.pub-status { font-weight: 600; color: var(--text-2); }
+.btn.pub-status.warn { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.pub-site { color: var(--text-3); text-decoration: none; }
+.pub-site:hover { color: var(--text); }
 
 /* ---------- 버튼 ---------- */
 .btn {

@@ -1,0 +1,25 @@
+// Cloudflare Worker 설정 — 방문자용 읽기 전용 사이트 (규약: worker/CONTRACT.md)
+// 비밀은 여기 쓰지 않는다: npx wrangler secret put PUBLISH_TOKEN / ADULT_PASSWORD / SESSION_SECRET
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "simsimhae",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-10-06",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    // /api/* 만 Worker 가 받고, 나머지(화면 파일)는 Worker 를 거치지 않고 바로 나간다 (요청 수 절약)
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "simsimhae"
+      // database_id 는 일부러 비워 둔다: 배포(npx wrangler deploy, GitHub 자동 배포 포함) 때 wrangler 가
+      // 이 Worker 에 이미 붙은 D1 → 같은 이름(simsimhae)의 D1 순으로 찾아 연결하고, 없으면 새로 만든다.
+      // 직접 `npx wrangler d1 create simsimhae` 로 만들었다면 그 id 를 "database_id" 로 넣어도 된다.
+      // 로컬 시험(wrangler dev --local)은 id 없이 이 컴퓨터 안의 D1 으로 돈다.
+    }
+  ]
+}
