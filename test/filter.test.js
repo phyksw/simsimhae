@@ -174,3 +174,11 @@ test('쇼츠 점수: 썰·반응류가 질문·핫딜보다 높다', () => {
 test('중복 제목 키', () => {
   assert.equal(titleKey('[펌] 작가와 독자의 기싸움 ㅋㅋㅋ'), titleKey('작가와 독자의 기싸움!!'));
 });
+
+test('성범죄·괴롭힘 소재는 차단 (장난 몰카는 통과)', () => {
+  const S = { strictness: 'strict' };
+  for (const t of ['알바하다가 성희롱 당한 썰', '지하철 성추행범 잡은 썰', '학폭 가해자 근황', '스토커한테 시달린 썰', '데이트폭력 신고했더니']) {
+    assert.equal(classify({ title: t }, S).status, 'blocked', t);
+  }
+  for (const t of ['몰카 레전드 ㅋㅋ (예능)', '동생 몰카 했는데 반응 ㅋㅋ']) assert.equal(classify({ title: t }, S).status, 'ok', t);
+});

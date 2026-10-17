@@ -42,3 +42,23 @@ test('기간 제한 없이 최근 BOARD_KEEP 개만 남는다', () => {
   assert.ok(kept.has('humoruniv:9'));
   assert.ok(!kept.has('humoruniv:100'));
 });
+
+test('소소한 이야기는 Claude 판정(분위기 점수 포함)이 끝난 글만', () => {
+  // 키워드 점수만 높은 글 (Claude 판정 없음) → 소소한 이야기에 없음
+  const kw = post(300, 0, null);
+  kw.shortsScore = 95;
+  store.upsertPost(kw);
+  // 판정은 있지만 분위기 점수가 없는 글 → 없음
+  post(301, 0, { verdict: 'ok', shortsScore: 90, reason: '', model: 't', at: '' });
+  // 판정 + 분위기 점수 → 있음
+  post(302, 0, { verdict: 'ok', shortsScore: 90, vibe: 90, reason: '', model: 't', at: '' });
+  const ids = boardPosts('story').map((p) => p.id);
+  assert.ok(!ids.includes('humoruniv:300'), '키워드만');
+  assert.ok(!ids.includes('humoruniv:301'), '분위기 점수 없음');
+  assert.ok(ids.includes('humoruniv:302'), 'Claude 판정 완료');
+  // 관리자가 직접 넣으면 판정이 없어도 들어간다
+  const m = store.getPost('humoruniv:300');
+  m.manualVibe = true;
+  store.upsertPost(m);
+  assert.ok(boardPosts('story').map((p) => p.id).includes('humoruniv:300'));
+});

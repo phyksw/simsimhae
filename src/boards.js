@@ -29,8 +29,8 @@ const STORY_FUNNY_MIN = 55;
 export function storyWorthy(p) {
   if (p.manualVibe === true) return true;
   if (p.manualVibe === false) return false;
-  if (p.ai) return p.ai.verdict === 'ok' && p.ai.shortsScore >= STORY_FUNNY_MIN && vibeOf(p) >= STORY_VIBE_MIN;
-  return (p.shortsScore ?? 0) >= STORY_FUNNY_MIN && vibeOf(p) >= 60;
+  // 운영자 요청: 소소한 이야기는 Claude 판정(웃김 + 분위기 점수)이 끝난 글만. 키워드 어림값만 있는 글은 넣지 않는다.
+  return !!p.ai && p.ai.verdict === 'ok' && typeof p.ai.vibe === 'number' && p.ai.shortsScore >= STORY_FUNNY_MIN && p.ai.vibe >= STORY_VIBE_MIN;
 }
 
 /**
