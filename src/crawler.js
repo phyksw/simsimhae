@@ -3,12 +3,14 @@
 import { EventEmitter } from 'node:events';
 import { config } from './config.js';
 import { loadSources } from './sources/index.js';
-import { classify, shortsScore, titleKey } from './filter.js';
+import { classify, shortsScore, titleKey, vibeGuess } from './filter.js';
 import { classifyPosts } from './ai.js';
-import { forgetCached } from './reader.js';
+import { forgetCached, cleanHtml, cleanComments, htmlToText } from './reader.js';
 import { withRequestScope } from './lib/http.js';
+import { hostMatches } from './lib/util.js';
 import * as store from './store.js';
 import { keptBoardIds } from './boards.js';
+import { CRITERIA_VERSION } from './criteria.js';
 
 const DUP_WINDOW_MS = 7 * 864e5;
 const RANK = { ok: 0, adult: 1, blocked: 2 };
@@ -81,7 +83,7 @@ export function rescorePost(p, med = currentMedians()) {
  * 제목으로 다시 판정하되, 본문 검사로 올라간 판정(사유가 '본문 '으로 시작)은 제목이 바뀌었다고 낮추지 않는다.
  * (본문은 다음 미리보기 때 다시 검사한다 — 호출 측이 bodyChecked 를 지운다)
  */
-function rejudgeKeepingBody(p, src) {
+export function rejudgeKeepingBody(p, src) {
   const t = classify(p, src);
   const prev = p.auto;
   const bodyReasons = (prev?.reasons || []).filter((r) => r.startsWith('본문 '));
@@ -128,8 +130,29 @@ async function crawlSource(src, now, signal) {
       if (page === 1 || signal?.aborted) break;
     }
   }
-  let added = 0;
+  const { fresh } = mergeListItems(src, items, now);
+  const state = {
+    lastRunAt: now,
+    ms: Date.now() - t0,
+    fetched: items.length,
+    added: fresh.length,
+    ok: errors.length === 0 && items.length > 0,
+    error: errors.join(' / ') || (items.length === 0 ? '목록이 비어 있음' : null),
+    via: null, // 이 서버가 직접 받은 결과 (PC 받아 넣기는 'pc')
+  };
+  if (state.ok) state.lastOkAt = now;
+  store.setSourceState(src.id, state);
+  return fresh;
+}
+
+/**
+ * 목록 항목을 저장소에 반영한다 (수집과 PC 에서 받아 넣기가 같이 쓴다): 새 글은 키워드 판정해서 넣고,
+ * 있는 글은 반응 수치를 갱신하고 제목이 바뀌었으면 다시 판정한다.
+ * @returns {{fresh: import('./store.js').Post[], updated: number}}
+ */
+function mergeListItems(src, items, now) {
   const fresh = [];
+  let updated = 0;
   const seen = new Set();
   for (const it of items) {
     if (!it?.postId || !it.title || !it.url) continue;
@@ -138,6 +161,7 @@ async function crawlSource(src, now, signal) {
     seen.add(id);
     const existing = store.getPost(id);
     if (existing) {
+      updated++;
       // 반응 수치·썸네일 갱신. 제목이 바뀌었으면 다시 판정.
       const titleChanged = existing.title !== it.title;
       Object.assign(existing, {
@@ -156,6 +180,8 @@ async function crawlSource(src, now, signal) {
         if (titleChanged) {
           // 글이 고쳐졌으면 본문도 바뀌었을 수 있으니 다음 미리보기 때 본문을 다시 검사한다
           if (existing.bodyChecked) existing.bodyChecked = false;
+          // PC 가 올려 준 미리보기도 옛 본문이니 버린다 (다음 PC 수집 때 다시 받는다)
+          if (existing.pcRead) delete existing.pcRead;
           forgetCached(existing.id);
           if (config.ai.enabled) {
             existing.aiPending = true;
@@ -197,19 +223,8 @@ async function crawlSource(src, now, signal) {
     p.shortsScore = 0;
     store.upsertPost(p);
     fresh.push(p);
-    added++;
   }
-  const state = {
-    lastRunAt: now,
-    ms: Date.now() - t0,
-    fetched: items.length,
-    added,
-    ok: errors.length === 0 && items.length > 0,
-    error: errors.join(' / ') || (items.length === 0 ? '목록이 비어 있음' : null),
-  };
-  if (state.ok) state.lastOkAt = now;
-  store.setSourceState(src.id, state);
-  return fresh;
+  return { fresh, updated };
 }
 
 /** 새 글을 기존 글과 제목으로 비교해 같은 글(다른 사이트에 퍼간 것)을 묶는다 */
@@ -236,13 +251,22 @@ function dice(x, y) {
 }
 const SIM_MIN = 0.8;
 
-/** 같은 글의 한쪽에 후방 표시가 있으면 다른 쪽에도 옮긴다 (사이트마다 표시 여부가 달라서 잠금 없이 새는 것 방지) */
+/**
+ * 같은 글의 한쪽에 후방 표시가 있으면 다른 쪽에도 옮긴다 (사이트마다 표시 여부가 달라서 잠금 없이 새는 것 방지).
+ * srcById 는 수집 대상과 상관없이 전체 출처여야 한다 (사본과 대표 글은 출처가 다르고, 엄격도(strict)가 빠지면 차단 글이 풀린다).
+ */
 function shareNsfw(a, b, srcById) {
   if (a.nsfwHint === b.nsfwHint) return;
   for (const p of [a, b]) {
     if (p.nsfwHint) continue;
     p.nsfwHint = true;
-    p.auto = rejudgeKeepingBody(p, srcById[p.source] || {});
+    const prev = p.auto;
+    const next = rejudgeKeepingBody(p, srcById[p.source] || {});
+    // 후방 표시를 더해서 판정이 느슨해질 일은 없다 — 출처를 못 찾아 엄격도를 모르는 등으로 느슨하게 나오면 이전 상태를 남긴다
+    p.auto =
+      prev && RANK[prev.status] > RANK[next.status]
+        ? { status: prev.status, reasons: [...new Set([...(prev.reasons || []), ...next.reasons])], flags: { ...next.flags, ...(prev.flags || {}) } }
+        : next;
     p.status = store.resolveStatus(p);
     store.upsertPost(p);
   }
@@ -326,8 +350,323 @@ function prune() {
       store.upsertPost(p);
     }
   }
+  prunePcReads(kept);
   return removed;
 }
+
+// =====================================================================
+// PC 에서 받아 넣기 (POST /api/admin/ingest): Cloudflare 에서 막힌 출처(403)를 운영자 PC 가 직접 받아 올린다.
+// 목록 항목은 수집과 똑같이(키워드 판정·중복 묶기·점수·출처 상태), 본문 미리보기는 미리보기와 똑같이(정리·본문 검사) 처리한다.
+// 클라우드는 그 출처의 본문을 못 가져오므로 미리보기는 글에 붙여(p.pcRead) 오래 둔다.
+// =====================================================================
+
+/**
+ * PC 수집이 이 시간 안에 있었던 출처는 이 서버의 자동 수집이 건너뛴다 (PC 가 멈추면 다시 직접 시도).
+ * 예약 작업 주기(하루 2번 이상 = 12시간 간격 이하)보다 길게 — 사이에 클라우드가 403 을 받아 출처 상태를 실패로 덮지 않게.
+ */
+export const PC_FEED_FRESH_MS = 13 * 3600e3;
+/** PC 미리보기를 글에 붙여 두는 기간 (소소한 이야기·소소한 웃음에 남은 글과 쇼츠 후보는 계속) — DO 메모리를 아끼려고 */
+export const PC_READ_KEEP_MS = 3 * 864e5;
+/** 받아 넣기 요청 하나의 상한 (본문 64KB 한도와 별개로 개수도 막는다) */
+export const INGEST_MAX_ITEMS = 300;
+export const INGEST_MAX_READS = 20;
+/** 미리보기 하나: 받은 HTML(정리 전) 글자 수, 댓글 수·댓글 글자 수 */
+const PC_HTML_MAX = 24_000;
+const PC_COMMENTS_MAX = 30;
+const PC_COMMENT_CHARS = 400;
+/** 같은 글의 미리보기를 PC 가 이만큼 못 가져오면 더 달라고 하지 않는다 (지워진 글 등) */
+const PC_READ_FAIL_MAX = 3;
+
+/** 이 출처를 PC 가 최근에 받아 넣고 있는지 */
+export function pcFed(srcId, nowMs = Date.now()) {
+  const at = Date.parse(store.getDb().sources[srcId]?.pcAt || '');
+  return Number.isFinite(at) && nowMs - at < PC_FEED_FRESH_MS;
+}
+
+/**
+ * 오래된 PC 미리보기를 글에서 뗀다 (게시판에 남은 글·쇼츠 후보·관리자 지정 글은 둔다).
+ * 기간은 글이 들어온 때와 미리보기를 붙인 때(pcRead.at) 중 늦은 쪽부터 센다 — 판정 대기열(7일)의 글에 PC 가 방금 붙인 미리보기를 바로 떼지 않게.
+ */
+function prunePcReads(kept = keptBoardIds()) {
+  const cutoff = Date.now() - PC_READ_KEEP_MS;
+  let n = 0;
+  for (const p of store.allPosts()) {
+    if (!p.pcRead || p.shorts || p.manual || kept.has(p.id)) continue;
+    if (Math.max(new Date(p.firstSeenAt).getTime() || 0, Date.parse(p.pcRead.at) || 0) < cutoff) {
+      delete p.pcRead;
+      store.upsertPost(p);
+      n++;
+    }
+  }
+  return n;
+}
+
+const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : null);
+const count = (v) => (v === null || v === undefined || v === '' ? null : Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.floor(Number(v)) : null);
+function httpUrl(v, max = 2000) {
+  if (typeof v !== 'string' || v.length > max) return null;
+  try {
+    const u = new URL(v);
+    return /^https?:$/.test(u.protocol) && !u.username && !u.password ? u : null;
+  } catch {
+    return null;
+  }
+}
+
+/** PC 가 보낸 목록 항목 하나를 출처 어댑터 규약(ListItem)대로 검사·정리한다. 틀리면 null. */
+export function cleanIngestItem(it, src) {
+  if (!it || typeof it !== 'object' || Array.isArray(it)) return null;
+  const postId = typeof it.postId === 'number' && Number.isSafeInteger(it.postId) ? String(it.postId) : it.postId;
+  if (typeof postId !== 'string' || !/^[A-Za-z0-9_.-]{1,60}$/.test(postId)) return null;
+  const title = str(it.title, 300)?.replace(/\s+/g, ' ');
+  if (!title) return null;
+  const u = httpUrl(it.url);
+  // 글 주소는 그 출처의 사이트여야 한다 (어댑터에 domains 가 없으면 주소 형식만 본다)
+  if (!u || (Array.isArray(src.domains) && src.domains.length && !hostMatches(u.hostname, src.domains))) return null;
+  const postedAt = typeof it.postedAt === 'string' && !Number.isNaN(Date.parse(it.postedAt)) ? new Date(it.postedAt).toISOString() : null;
+  return {
+    postId,
+    title,
+    url: u.toString(),
+    author: str(it.author, 60) || null,
+    postedAt,
+    commentCount: count(it.commentCount),
+    views: count(it.views),
+    likes: count(it.likes),
+    category: str(it.category, 60) || null,
+    nsfwHint: it.nsfwHint === true,
+    thumbnail: httpUrl(it.thumbnail)?.toString() ?? null,
+  };
+}
+
+/**
+ * 본문 텍스트로 한 번 더 검사한다 (src/reader.js readPost 와 같은 기준: 본문은 제목보다 기준이 높고, 더 엄격해질 때만 바꾼다).
+ * @returns {boolean} 최종 상태가 바뀌었는지
+ */
+export function checkBody(p, src, text, nsfwHint = false) {
+  if (p.bodyChecked) return false;
+  if (nsfwHint) p.nsfwHint = true;
+  const verdict = classify({ title: p.title, category: p.category, nsfwHint: !!p.nsfwHint }, src, { body: text });
+  const rank = { ok: 0, adult: 1, blocked: 2 };
+  if (rank[verdict.status] > rank[p.auto?.status || 'ok']) p.auto = { status: verdict.status, reasons: verdict.reasons, flags: verdict.flags };
+  p.bodyChecked = true;
+  const before = p.status;
+  p.status = store.resolveStatus(p);
+  store.upsertPost(p);
+  return before !== p.status;
+}
+
+/**
+ * PC 가 보낸 미리보기 하나(Article 모양)를 정리해 글에 붙인다. 이 서버가 미리보기를 열 때와 똑같이 HTML 을 정리하고
+ * 이미지 주소를 /api/img 프록시로 바꾸고 본문 검사를 한다.
+ */
+function attachPcRead(p, src, a, nowIso) {
+  const rawHtml = typeof a.html === 'string' ? a.html.slice(0, PC_HTML_MAX) : '';
+  const html = cleanHtml(rawHtml, src);
+  const text = htmlToText(html);
+  const raw = Array.isArray(a.comments) ? a.comments.slice(0, PC_COMMENTS_MAX * 2) : [];
+  const comments = cleanComments(raw, src)
+    .slice(0, PC_COMMENTS_MAX)
+    .map((c) => ({ ...c, text: c.text.slice(0, PC_COMMENT_CHARS) }));
+  const commentTotal = count(a.commentTotal) ?? p.commentCount ?? null;
+  p.pcRead = {
+    at: nowIso,
+    title: str(a.title, 300) || p.title,
+    html,
+    text,
+    mediaCount: (html.match(/<(img|video|iframe)\b/g) || []).length,
+    comments,
+    commentTotal,
+  };
+  delete p.pcReadFails;
+  forgetCached(p.id);
+  const changed = checkBody(p, src, text, a.nsfwHint === true);
+  store.upsertPost(p);
+  return changed;
+}
+
+/** PC 미리보기를 미리보기 응답(readPost 결과) 모양으로 */
+export function pcReadData(p) {
+  const r = p.pcRead;
+  if (!r) return null;
+  return { title: r.title || p.title, html: r.html, text: r.text, mediaCount: r.mediaCount, statusChanged: false, comments: r.comments || [], commentTotal: r.commentTotal ?? null };
+}
+
+// ---------- 선별 점수 (점수 모델이 있으면 그것, 없으면 키워드 점수) ----------
+
+let modelFn; // undefined = 아직 안 읽음, null = 없음
+let modelWarned = false;
+/**
+ * src/model/score.js 의 modelScore(post) → {funny, vibe} 를 읽는다. 파일이 없거나 고장이면 null (키워드 점수로 대신).
+ * @returns {Promise<((p: any) => any)|null>}
+ */
+export async function loadModelScore() {
+  if (modelFn !== undefined) return modelFn;
+  try {
+    const m = await import('./model/score.js');
+    // weights.json 모양이 이상하면 score.js 가 MODEL_READY=false 로 뜬다 → 키워드 점수로 (모두 0점이라 순서가 무너지지 않게)
+    modelFn = typeof m.modelScore === 'function' && m.MODEL_READY !== false ? m.modelScore : null;
+  } catch (e) {
+    if (e?.code !== 'ERR_MODULE_NOT_FOUND' && !modelWarned) {
+      modelWarned = true;
+      console.warn(`[model] 점수 모델을 읽지 못해 키워드 점수로 대신해요: ${e?.message || e}`);
+    }
+    modelFn = null;
+  }
+  return modelFn;
+}
+/** 시험용: 점수 모델을 바꿔 끼운다 (null = 없음, undefined = 다시 읽기) */
+export function setModelScore(fn) {
+  modelFn = fn;
+}
+
+const clamp100 = (v) => Math.max(0, Math.min(100, Math.round(Number(v) || 0)));
+/** 판정 우선순위: "소소한 이야기"에 들려면 웃김과 분위기가 둘 다 있어야 해서 섞되, 분위기를 조금 더 본다 */
+export const priorityOf = (s) => Math.round(s.funny * 0.45 + s.vibe * 0.55);
+
+/**
+ * 글마다 선별 점수 {funny, vibe, priority, by}. by = 'model'(점수 모델) | 'rule'(키워드 점수·제목 어림값)
+ * @param {import('./store.js').Post[]} posts
+ * @returns {Promise<Map<string, {funny: number, vibe: number, priority: number, by: 'model'|'rule'}>>}
+ */
+export async function selectionScores(posts) {
+  const fn = await loadModelScore();
+  const out = new Map();
+  for (const p of posts) {
+    let s = null;
+    if (fn) {
+      try {
+        const r = await fn(p);
+        if (r && Number.isFinite(Number(r.funny)) && Number.isFinite(Number(r.vibe))) s = { funny: clamp100(r.funny), vibe: clamp100(r.vibe), by: 'model' };
+      } catch (e) {
+        if (!modelWarned) {
+          modelWarned = true;
+          console.warn(`[model] 점수 모델 오류 (${p.id}): ${e?.message || e}`);
+        }
+      }
+    }
+    if (!s) s = { funny: clamp100(p.shortsScore ?? shortsScore(p)), vibe: clamp100(vibeGuess(p)), by: 'rule' };
+    s.priority = priorityOf(s);
+    out.set(p.id, s);
+  }
+  return out;
+}
+
+/**
+ * PC 에서 받아 넣기. 요청 모양:
+ *   { source, items?: ListItem[], reads?: [{postId|id, title?, html, comments?, commentTotal?, nsfwHint?}], readFailed?: string[],
+ *     run?: {id, fetched, ms, errors: string[]}, wantReads?: number }
+ *   - run 이 있으면 출처 상태를 갱신한다 (나눠 보낸 같은 run.id 는 새 글 수를 더한다)
+ *   - 응답의 needRead: 이 출처에서 아직 미리보기가 없는 글 (선별 점수 높은 순) — PC 가 다음에 가져와 reads 로 보낸다
+ * @param {any} body
+ * @returns {Promise<{status: number, body: any}>}
+ */
+export async function ingestFromPc(body) {
+  const b = body && typeof body === 'object' ? body : {};
+  const registry = await loadSources();
+  const src = typeof b.source === 'string' ? registry.find((s) => s.id === b.source) : null;
+  if (!src) return { status: 400, body: { error: '알 수 없는 출처예요' } };
+  if (b.items !== undefined && !Array.isArray(b.items)) return { status: 400, body: { error: 'items 는 목록이어야 해요' } };
+  if (b.reads !== undefined && !Array.isArray(b.reads)) return { status: 400, body: { error: 'reads 는 목록이어야 해요' } };
+  const rawItems = b.items || [];
+  const rawReads = b.reads || [];
+  if (rawItems.length > INGEST_MAX_ITEMS) return { status: 413, body: { error: `목록은 한 번에 ${INGEST_MAX_ITEMS}개까지예요` } };
+  if (rawReads.length > INGEST_MAX_READS) return { status: 413, body: { error: `미리보기는 한 번에 ${INGEST_MAX_READS}개까지예요` } };
+
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const items = rawItems.map((it) => cleanIngestItem(it, src)).filter(Boolean);
+  const { fresh, updated } = mergeListItems(src, items, now);
+
+  let stored = 0;
+  let statusChanged = 0;
+  const readSkipped = [];
+  // 미리보기의 본문 검사로 차단된 글 (판정 대기열이 빼는 글과 같은 기준: 키워드·본문 판정이 blocked) — PC 가 판정 파일에서 뺀다
+  const readBlocked = [];
+  for (const a of rawReads) {
+    const pid = typeof a?.postId === 'number' ? String(a.postId) : a?.postId;
+    const id = typeof a?.id === 'string' ? a.id : typeof pid === 'string' ? `${src.id}:${pid}` : '';
+    const p = id.startsWith(`${src.id}:`) ? store.getPost(id) : null;
+    if (!p || !a || typeof a !== 'object' || typeof a.html !== 'string') {
+      readSkipped.push(id || null);
+      continue;
+    }
+    if (attachPcRead(p, src, a, now)) {
+      statusChanged++;
+      rescorePost(p);
+      store.upsertPost(p);
+    }
+    if (p.auto?.status === 'blocked') readBlocked.push(p.id);
+    stored++;
+  }
+  for (const id of Array.isArray(b.readFailed) ? b.readFailed.slice(0, INGEST_MAX_READS * 2) : []) {
+    const p = typeof id === 'string' && id.startsWith(`${src.id}:`) ? store.getPost(id) : null;
+    if (!p || p.pcRead) continue;
+    p.pcReadFails = (p.pcReadFails || 0) + 1;
+    store.upsertPost(p);
+  }
+
+  if (b.run && typeof b.run === 'object') {
+    const prev = store.getDb().sources[src.id] || {};
+    const runId = str(b.run.id, 60) || null;
+    const errors = (Array.isArray(b.run.errors) ? b.run.errors : []).map((e) => str(String(e), 200)).filter(Boolean).slice(0, 5);
+    const fetched = count(b.run.fetched) ?? items.length;
+    const okRun = errors.length === 0 && fetched > 0;
+    const state = {
+      lastRunAt: now,
+      ms: count(b.run.ms),
+      fetched,
+      added: (runId && prev.runId === runId ? prev.added || 0 : 0) + fresh.length,
+      ok: okRun,
+      error: errors.join(' / ') || (fetched === 0 ? '목록이 비어 있음' : null),
+      via: 'pc',
+      runId,
+    };
+    if (okRun) {
+      state.lastOkAt = now;
+      state.pcAt = now;
+    }
+    store.setSourceState(src.id, state);
+  }
+
+  // 중복 묶기의 판정 기준(엄격도)은 전체 출처로: 대표 글이 다른 출처(dcinside·fmkorea 등)일 수 있다
+  if (fresh.length) linkDuplicates(fresh, Object.fromEntries(registry.map((s) => [s.id, s])));
+  rescoreAll();
+  prunePcReads();
+  store.saveNow();
+
+  // 아직 미리보기가 없는 이 출처의 글: 걸러지지 않았고, 최근(PC 미리보기를 붙여 두는 기간 안)에 들어왔고, 계속 실패한 글이 아닌 것
+  const want = Math.max(0, Math.min(40, b.wantReads === undefined ? INGEST_MAX_READS : Math.floor(Number(b.wantReads) || 0)));
+  const cutoff = nowMs - PC_READ_KEEP_MS;
+  const cands = store
+    .allPosts()
+    .filter((p) => p.source === src.id && !p.pcRead && p.status !== 'blocked' && (p.pcReadFails || 0) < PC_READ_FAIL_MAX && new Date(p.firstSeenAt).getTime() >= cutoff);
+  const scores = await selectionScores(cands);
+  const needRead = cands
+    .map((p) => ({ id: p.id, url: p.url, priority: scores.get(p.id).priority, ok: p.status === 'ok' }))
+    .sort((x, y) => Number(y.ok) - Number(x.ok) || y.priority - x.priority || x.id.localeCompare(y.id))
+    .slice(0, want)
+    .map(({ ok, ...x }) => x); // eslint-disable-line no-unused-vars
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      source: src.id,
+      received: rawItems.length,
+      added: fresh.length,
+      updated,
+      invalid: rawItems.length - items.length,
+      reads: { stored, skipped: readSkipped, blocked: readBlocked },
+      statusChanged,
+      needRead,
+      freshIds: fresh.map((p) => p.id),
+    },
+  };
+}
+
+// 판정 기준 표시(CRITERIA_VERSION)는 src/criteria.js 에 둔다 (위 import, 예전처럼 여기서도 내보낸다)
+export { CRITERIA_VERSION };
 
 // 판정 실패 뒤 다시 보내기까지 기다리는 시간: 15분 → 30분 → 1시간 … 최대 6시간
 const aiBackoffMs = (tries) => Math.min(15 * 60e3 * 2 ** Math.max(0, tries - 1), 6 * 3600e3);
@@ -366,7 +705,7 @@ async function runAi() {
       store.upsertPost(p);
       return;
     }
-    p.ai = { ...r, model: config.ai.model, at };
+    p.ai = { ...r, model: config.ai.model, at, criteria: CRITERIA_VERSION };
     p.aiPending = false;
     p.aiTries = 0;
     p.aiNextAt = null;
@@ -388,19 +727,22 @@ export function crawlAll() {
   const job = (async () => {
     const t0 = Date.now();
     const now = new Date().toISOString();
-    const sources = await activeSources();
+    // PC 가 최근에 받아 넣고 있는 출처(클라우드에서 403 인 곳)는 여기서 다시 받지 않는다 — 실패 기록이 PC 결과를 덮지 않게
+    const sources = (await activeSources()).filter((s) => !pcFed(s.id, t0));
+    // 중복 묶기의 판정 기준(엄격도)은 수집 대상과 따로 전체 출처로 (대표 글이 PC 가 받는 출처·수집을 끈 출처일 수 있다)
+    const registry = Object.fromEntries((await loadSources()).map((x) => [x.id, x]));
     // 출처마다 시간 예산: 느린 출처 하나가 수집 전체(알람·옮기기·다음 수집)를 붙잡지 않게
     const budget = config.crawlSourceBudgetMs;
     const freshLists = await Promise.all(
       sources.map((s) =>
         crawlSource(s, now, budget > 0 ? AbortSignal.timeout(budget) : undefined).catch((e) => {
-          store.setSourceState(s.id, { lastRunAt: now, ok: false, error: e.message });
+          store.setSourceState(s.id, { lastRunAt: now, ok: false, error: e.message, via: null });
           return [];
         }),
       ),
     );
     const fresh = freshLists.flat();
-    linkDuplicates(fresh, Object.fromEntries(sources.map((x) => [x.id, x])));
+    linkDuplicates(fresh, registry);
     const aiReviewed = await runAi().catch((e) => {
       console.warn(`[crawl] Claude 검수 실패: ${e.message}`);
       return 0;

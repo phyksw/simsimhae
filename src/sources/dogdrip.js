@@ -202,6 +202,7 @@ export default {
   // Referer 없음/개드립 Referer 는 200, 외부 Referer 는 403 → 개드립 Referer 를 붙인다
   referer: `${BASE}/`,
   strictness: 'strict', // 정치·시사·젠더 글이 인기글에 자주 섞임
+  crawlDelayMs: CRAWL_DELAY_MS, // 같은 사이트 요청 간격 (PC 판정 루틴이 그림을 직접 받을 때도 지킨다)
   disabled: false,
   disabledReason: null,
 

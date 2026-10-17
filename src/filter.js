@@ -1,8 +1,13 @@
 // 키워드 기반 검열 + 쇼츠 적합도 점수. 즉시·무료로 돌아가는 1차 판정이고, Claude 검수(ai.js)가 켜져 있으면 그 결과와 합쳐진다.
 // 관리자 금지어는 저장소 백엔드에 둔다: 로컬 = data/custom-rules.json (src/platform/node.js), 클라우드 = DO 저장소 (setRulesBackend).
+// 쇼츠 점수(shortsScore)·분위기 점수(vibeGuess)는 키워드 점수(model/keyword.js)와 학습 점수(model/score.js)를 섞는다.
+// 학습 점수는 정적 import (가중치 JSON 도 번들에 들어간다). model/ 쪽은 filter.js 를 import 하지 않아 순환이 없다.
 import { createHash } from 'node:crypto';
 import * as platform from '#platform';
-import { RULES, CATEGORY_RULES, CATEGORY_EXACT, SHORTS_SIGNALS, SOURCE_BIAS, VIBE_SIGNALS } from './filter-rules.js';
+import { RULES, CATEGORY_RULES, CATEGORY_EXACT } from './filter-rules.js';
+import { keywordShorts, keywordVibe } from './model/keyword.js';
+import { MODEL_BLEND, modelScore, ruleCaps } from './model/score.js';
+import { blendScore } from './model/train.js';
 
 const WEIGHT = { strong: 2, weak: 1, soft: 0.5 };
 const CATEGORIES = Object.keys(RULES);
@@ -244,34 +249,15 @@ export function classify(post, source = {}, opts = {}) {
 }
 
 /**
- * 쇼츠(읽어주며 반응하는 형식) 적합도 0~100. 제목 신호 + 같은 소스 안에서의 반응(추천·댓글) 수준.
- * @param {{title: string, commentCount?: number|null, likes?: number|null, views?: number|null}} post
+ * 쇼츠(읽어주며 반응하는 형식) 적합도 0~100 정수 = 키워드 점수(제목 신호 + 같은 소스 안에서의 반응 수준)와 학습 점수(funny)를
+ * weights.json 의 비율(MODEL_BLEND.funny = 키워드 몫)로 섞고, 금지 소재(성적·무거운 소재·분노·연애 갈등·돈·남녀 일반화·홍보) 상한을 씌운다.
+ * 섞는 비율은 scripts/train-rule-model.js 가 겹 밖 예측으로 고른다.
+ * @param {{title: string, source?: string, category?: string|null, commentCount?: number|null, likes?: number|null, views?: number|null}} post
  * @param {{likes?: number, comments?: number, views?: number}} [medians] 같은 소스의 중앙값 (없으면 반응 점수 생략)
  */
 export function shortsScore(post, medians = {}) {
-  const t = normalize(post.title);
-  let s = 40 + (SOURCE_BIAS[post.source] || 0);
-  let plusHits = 0;
-  for (const [w, p] of SHORTS_SIGNALS.plus) {
-    if (t.includes(w.toLowerCase())) {
-      s += p;
-      plusHits++;
-    }
-  }
-  for (const [w, p] of SHORTS_SIGNALS.minus) if (t.includes(w.toLowerCase())) s += p;
-  const len = [...String(post.title || '')].length;
-  if (len < 6) s -= 8; // "ㅋㅋㅋ", "제목" 같은 정보 없는 제목
-  else if (len <= 9 && !plusHits) s -= 8; // "카리나", "리센느 원이" 같은 이름만 있는 사진 글
-  else if (len >= 12 && len <= 40) s += 4; // 썰 제목은 보통 이 길이
-  if (/\?|？/.test(post.title || '')) s += 2;
-
-  const rel = (v, m) => (v != null && m ? Math.log2((v + 1) / (m + 1)) : null);
-  const parts = [rel(post.likes, medians.likes), rel(post.commentCount, medians.comments), rel(post.views, medians.views)].filter((x) => x != null);
-  if (parts.length) {
-    const avg = parts.reduce((a, b) => a + b, 0) / parts.length;
-    s += Math.max(-10, Math.min(18, avg * 7));
-  }
-  return Math.max(0, Math.min(100, Math.round(s)));
+  const kw = keywordShorts(post, medians || {});
+  return blendScore(kw, modelScore(post).funny, MODEL_BLEND.funny, ruleCaps(post).funny);
 }
 
 /** 중복 판정용 제목 정규화: 꼬리표·이모지·기호·공백 제거 */
@@ -306,16 +292,11 @@ export function rulesFingerprint(srcs) {
 }
 
 /**
- * "썰·대화" 분위기 점수 0~100 (Claude 판정이 없을 때 쓰는 제목 기반 어림값).
- * 운영자가 보여준 쇼츠처럼 글자로 된 썰·대화·반응이면 높고, 사진·움짤·영상 위주면 낮다.
- * @param {{title: string, source?: string}} post
+ * "소소한 이야기" 분위기 점수 0~100 정수 (Claude 판정이 없을 때 쓰는 제목 기반 어림값) = 키워드 점수와 학습 점수(vibe)를
+ * weights.json 의 비율(MODEL_BLEND.vibe = 키워드 몫)로 섞고 금지 소재 상한을 씌운다.
+ * 운영자가 보여준 쇼츠처럼 말의 재미·문화 차이·의외의 이유·가벼운 대화면 높고, 사진·영상 위주이거나 분노·갈등·무거운 소재면 낮다.
+ * @param {{title: string, source?: string, category?: string|null}} post
  */
 export function vibeGuess(post) {
-  const t = normalize(post.title);
-  let s = 30 + (post.source === 'blind' ? 10 : 0);
-  for (const [w, p] of VIBE_SIGNALS.story) if (t.includes(w.toLowerCase())) s += p;
-  for (const [w, p] of VIBE_SIGNALS.visual) if (t.includes(w.toLowerCase())) s += p;
-  for (const [w, p] of VIBE_SIGNALS.tone || []) if (t.includes(w.toLowerCase())) s += p;
-  for (const [w, p] of VIBE_SIGNALS.warm || []) if (t.includes(w.toLowerCase())) s += p;
-  return Math.max(0, Math.min(100, Math.round(s)));
+  return blendScore(keywordVibe(post), modelScore(post).vibe, MODEL_BLEND.vibe, ruleCaps(post).vibe);
 }

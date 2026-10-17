@@ -10,12 +10,14 @@ import { createHmac, timingSafeEqual, randomBytes } from 'node:crypto';
 import { config } from './config.js';
 import * as store from './store.js';
 import { isPending, isPublic, groupIndex } from './store.js';
-import { loadSources } from './sources/index.js';
-import { liveState, setLive, activeSources, rescoreAll, rescorePost, schedule, isRunning } from './crawler.js';
+import { loadSources, getSource } from './sources/index.js';
+import { liveState, setLive, activeSources, rescoreAll, rescorePost, schedule, isRunning, ingestFromPc, selectionScores, pcReadData, checkBody } from './crawler.js';
+import { CRITERIA_VERSION } from './criteria.js';
 import { readPost, forgetCached } from './reader.js';
 import { getCustomRules, saveCustomRules } from './filter.js';
 import { aiStatus } from './ai.js';
-import { boardPosts, sortPosts, vibeOf, storyWorthy, alsoOnOf, sourceShown } from './boards.js';
+import { boardPosts, sortPosts, vibeOf, storyWorthy, alsoOnOf, sourceShown, STORY_VIBE_MIN } from './boards.js';
+import { ruleCaps } from './model/score.js';
 import { rejudgeAll } from './rejudge.js';
 import { applyImport, postList, POST_MAX_CHARS } from './importer.js';
 
@@ -205,6 +207,67 @@ function serialize(p, { admin, groups }) {
   return o;
 }
 
+// ---------- 판정 대기열의 미리보기 요약 ----------
+const QUEUE_TEXT_CHARS = 1500;
+const QUEUE_BEST_COMMENTS = 5;
+const QUEUE_COMMENT_CHARS = 200;
+const QUEUE_IMAGES = 3;
+const unescapeAttr = (s) =>
+  s.replace(/&(amp|quot|lt|gt|#39|#x27);/g, (m, k) => ({ amp: '&', quot: '"', lt: '<', gt: '>', '#39': "'", '#x27': "'" })[k]);
+
+/** 정리된 본문 HTML 에서 이미지 주소 (나온 순서, 영상은 표지 그림). /api/img 프록시 주소는 direct:false */
+export function imagesOf(html, max = QUEUE_IMAGES) {
+  const out = [];
+  const re = /<(img|video)\b([^>]*)>/gi;
+  for (let m; (m = re.exec(String(html || ''))) && out.length < max; ) {
+    const attr = m[1].toLowerCase() === 'img' ? 'src' : 'poster';
+    const v = new RegExp(`\\s${attr}="([^"]*)"`, 'i').exec(m[2]);
+    if (!v) continue;
+    const src = unescapeAttr(v[1]);
+    const proxied = src.startsWith('/api/img?');
+    if (!proxied && !/^https?:\/\//i.test(src)) continue; // data: 등은 넣지 않는다
+    if (out.some((x) => x.src === src)) continue;
+    out.push({ src, direct: !proxied });
+  }
+  return out;
+}
+
+/** 미리보기(readPost 결과 모양) → 판정용 요약: 본문 앞부분, 베스트(없으면 추천 많은) 댓글 몇 개, 이미지 주소 최대 3개 */
+export function summarizeRead(data, from) {
+  const comments = (Array.isArray(data?.comments) ? data.comments : []).filter((c) => c && c.text);
+  const best = [...comments.filter((c) => c.best), ...comments.filter((c) => !c.best).sort((a, b) => (b.likes ?? 0) - (a.likes ?? 0))]
+    .slice(0, QUEUE_BEST_COMMENTS)
+    .map((c) => ({ text: String(c.text).slice(0, QUEUE_COMMENT_CHARS), likes: c.likes ?? null, best: !!c.best }));
+  const text = String(data?.text || '');
+  return {
+    from,
+    text: text.slice(0, QUEUE_TEXT_CHARS),
+    textLength: text.length,
+    mediaCount: data?.mediaCount ?? 0,
+    commentTotal: data?.commentTotal ?? null,
+    bestComments: best,
+    images: imagesOf(data?.html),
+  };
+}
+
+/**
+ * 옛 기준 판정 다시 보기(review-queue?revisit=1) 대상: Claude 판정이 있지만 지금 기준 표시(ai.criteria = CRITERIA_VERSION)가 없고,
+ * 유머 아님(not_humor)이거나 정상인데 분위기 점수가 소소한 이야기 기준(STORY_VIBE_MIN)에 못 미치는 글 — 새 기준(잡학 통과)이면 들 수 있는 글.
+ * 관리자가 상태나 소소한 이야기 넣기/빼기를 정한 글, 키워드·본문 판정이 차단·므흣인 글, 금지 소재 상한(점수 모델 규칙)에 걸린 글,
+ * 대표 글이 남아 있는 사본은 뺀다.
+ */
+function revisitable(p) {
+  const a = p.ai;
+  if (!a || a.criteria === CRITERIA_VERSION) return false;
+  const lowVibe = a.verdict === 'ok' && !(typeof a.vibe === 'number' && a.vibe >= STORY_VIBE_MIN);
+  if (a.verdict !== 'not_humor' && !lowVibe) return false;
+  if (p.manual || typeof p.manualVibe === 'boolean') return false;
+  if ((p.auto?.status || 'ok') !== 'ok' || p.nsfwHint) return false;
+  if (p.dupOf && store.getPost(p.dupOf)) return false;
+  const caps = ruleCaps(p);
+  return caps.funny >= 100 && caps.vibe >= 100;
+}
+
 function decodeParam(raw) {
   try {
     const id = decodeURIComponent(raw);
@@ -327,12 +390,19 @@ export function createApi(host) {
     if (p.status === 'adult' && !isAdult(req)) return res(403, { error: 'locked' });
     if ((p.status === 'blocked' || isPending(p)) && !admin) return res(404, { error: '볼 수 없는 글이에요' });
     let data;
-    try {
-      data = await readPost(p);
-    } catch (e) {
-      // e.busy: 같은 사이트 요청이 밀려 있어 기다리지 않았다 (src/lib/http.js BusyError)
-      const why = e.busy ? '잠시 뒤에 다시 해 주세요' : e.status ? `HTTP ${e.status}` : e.message;
-      return res(502, { error: `원문을 불러오지 못했어요 (${why})`, url: p.url });
+    if (p.pcRead) {
+      // PC 가 받아 올려 준 미리보기 (이 서버가 원문을 못 가져오는 출처). 규칙이 바뀌어 본문 검사가 풀렸으면 다시 본다.
+      const src = await getSource(p.source);
+      const statusChanged = !!src && checkBody(p, src, p.pcRead.text || '');
+      data = { ...pcReadData(p), statusChanged };
+    } else {
+      try {
+        data = await readPost(p);
+      } catch (e) {
+        // e.busy: 같은 사이트 요청이 밀려 있어 기다리지 않았다 (src/lib/http.js BusyError)
+        const why = e.busy ? '잠시 뒤에 다시 해 주세요' : e.status ? `HTTP ${e.status}` : e.message;
+        return res(502, { error: `원문을 불러오지 못했어요 (${why})`, url: p.url });
+      }
     }
     const fresh = store.getPost(p.id) || p;
     // 본문 검사로 상태가 바뀌었으면 쇼츠 점수도 지금 상태로 (공개→차단이면 10 이하로, 그 반대도)
@@ -414,26 +484,161 @@ export function createApi(host) {
     return ok(setLive({ live: typeof on === 'boolean' ? on : undefined, intervalMin: intervalMin != null ? Number(intervalMin) : undefined }));
   }
 
-  // Claude 검수 대기열: 아직 판정이 없는 최근 글 (예약 작업·수동 검수용)
+  /**
+   * Claude 검수 대기열: 아직 판정이 없는 최근 7일 글을 선별 점수(점수 모델, 없으면 키워드 점수) 높은 순으로 (PC 판정 루틴·예약 작업용).
+   *   ?limit=300  ?vibe=1 (판정은 정상인데 분위기 점수가 없는 글)
+   *   ?revisit=1 — 대신 옛 기준 판정 다시 보기 대상(revisitable, 기간 제한 없음)을 점수 모델의 분위기(vibe) 점수 높은 순으로. 항목마다 previousVerdict (옛 판정)
+   *   ?withRead=1&readTop=20 — 위에서 readTop 개는 본문 앞부분·베스트 댓글·이미지 주소(최대 3개)도 (본문 검사로 걸러진 글은 뺀다).
+   *     PC 미리보기(p.pcRead)가 있는 글은 readTop 밖이어도 붙인다
+   * 응답의 criteria: 지금 판정 기준 표시 (판정을 올리면 이 표시로 저장된다)
+   */
   async function reviewQueue(req) {
     const limit = Math.max(1, Math.min(1000, Number(req.query('limit')) || 300));
     const names = Object.fromEntries((await loadSources()).map((x) => [x.id, x.name]));
     const since = Date.now() - 7 * 864e5;
     const needVibe = req.query('vibe') === '1';
-    const items = store
-      .allPosts()
-      .filter((p) =>
-        needVibe
-          ? p.ai?.verdict === 'ok' && typeof p.ai.vibe !== 'number' && new Date(p.firstSeenAt).getTime() > since
-          : !p.ai && !p.manual && p.auto?.status !== 'blocked' && new Date(p.firstSeenAt).getTime() > since,
-      )
-      .sort((a, b) => String(b.firstSeenAt).localeCompare(String(a.firstSeenAt)))
-      .slice(0, limit)
-      .map((p) => ({ id: p.id, source: p.source, sourceName: names[p.source] || p.source, title: p.title, category: p.category, likes: p.likes, comments: p.commentCount, auto: p.auto?.status }));
-    return ok({ total: items.length, items });
+    const revisit = !needVibe && req.query('revisit') === '1';
+    const all = store.allPosts();
+    const recent = (p) => new Date(p.firstSeenAt).getTime() > since;
+    const waitingOf = (vibe) =>
+      all.filter((p) =>
+        vibe ? p.ai?.verdict === 'ok' && typeof p.ai.vibe !== 'number' && recent(p) : !p.ai && !p.manual && p.auto?.status !== 'blocked' && recent(p),
+      );
+    const revisitList = all.filter(revisitable);
+    const waiting = revisit ? revisitList : waitingOf(needVibe);
+    const scores = await selectionScores(waiting);
+    // 다시 보기는 "소소한 이야기" 후보를 찾는 일이라 분위기 점수를 먼저 본다
+    const key = revisit ? (s) => s.vibe * 1000 + s.priority : (s) => s.priority;
+    let picked = waiting
+      .sort((a, b) => key(scores.get(b.id)) - key(scores.get(a.id)) || String(b.firstSeenAt).localeCompare(String(a.firstSeenAt)) || a.id.localeCompare(b.id))
+      .slice(0, limit);
+
+    const reads = new Map();
+    if (req.query('withRead') === '1') {
+      const top = Math.max(1, Math.min(40, Number(req.query('readTop')) || 20));
+      for (const [id, r] of await readsFor(picked.slice(0, top))) reads.set(id, r);
+      // PC 가 올려 준 미리보기가 있는 글은 readTop 밖이어도 붙인다 (저장된 것이라 원문 요청이 없다 — PC 가 같은 글을 다시 읽지 않게)
+      for (const p of picked.slice(top)) {
+        if (!p.pcRead) continue;
+        await recheckPcRead(p);
+        reads.set(p.id, { read: summarizeRead(pcReadData(p), 'pc') });
+      }
+      // 본문 검사로 이제 걸러진 글은 판정할 필요가 없다 (키워드와 Claude 중 더 엄격한 쪽을 따르므로). 다시 보기는 므흣이 된 글도 뺀다.
+      picked = picked.filter((p) => {
+        const fresh = store.getPost(p.id);
+        return needVibe || (revisit ? !!fresh && revisitable(fresh) : fresh?.auto?.status !== 'blocked');
+      });
+    }
+    let lastVerdictAt = null;
+    for (const p of all) if (p.ai?.at && (!lastVerdictAt || p.ai.at > lastVerdictAt)) lastVerdictAt = p.ai.at;
+
+    const items = picked.map((p) => {
+      const s = scores.get(p.id);
+      const o = {
+        id: p.id,
+        source: p.source,
+        sourceName: names[p.source] || p.source,
+        title: p.title,
+        url: p.url,
+        category: p.category,
+        likes: p.likes,
+        comments: p.commentCount,
+        views: p.views,
+        postedAt: p.postedAt,
+        firstSeenAt: p.firstSeenAt,
+        auto: p.auto?.status,
+        dupOf: p.dupOf || null,
+        modelScore: { funny: s.funny, vibe: s.vibe },
+        priority: s.priority,
+        scoredBy: s.by,
+        ...(needVibe ? { ai: { verdict: p.ai.verdict, shortsScore: p.ai.shortsScore, reason: p.ai.reason } } : {}),
+        ...(revisit
+          ? {
+              previousVerdict: {
+                verdict: p.ai.verdict,
+                shortsScore: p.ai.shortsScore ?? null,
+                vibe: typeof p.ai.vibe === 'number' ? p.ai.vibe : null,
+                reason: p.ai.reason || '',
+                model: p.ai.model || null,
+                at: p.ai.at || null,
+              },
+            }
+          : {}),
+      };
+      if (reads.has(p.id)) Object.assign(o, reads.get(p.id));
+      return o;
+    });
+    return ok({
+      total: items.length,
+      waiting: waiting.length,
+      waitingVibe: needVibe ? waiting.length : waitingOf(true).length,
+      waitingRevisit: revisitList.length,
+      ...(revisit ? { revisit: true } : {}),
+      criteria: CRITERIA_VERSION,
+      lastVerdictAt,
+      scoredBy: items.some((x) => x.scoredBy === 'model') ? 'model' : 'rule',
+      items,
+    });
   }
 
-  // Claude 검수 결과 넣기: {model, items: [{id, verdict, shortsScore, reason}]}
+  /** PC 미리보기가 있는 글: 본문 검사가 풀려 있으면(규칙 재판정 뒤) 저장된 본문으로 다시 검사하고, 상태가 바뀌면 점수·변경 알림까지 */
+  async function recheckPcRead(p) {
+    if (!p.pcRead || p.bodyChecked) return false;
+    const src = await getSource(p.source);
+    if (!src || !checkBody(p, src, p.pcRead.text || '')) return false;
+    rescorePost(p);
+    store.upsertPost(p);
+    changed();
+    return true;
+  }
+
+  /** 판정 대기열에 붙일 미리보기 요약. PC 미리보기 → 캐시 → 원문 순으로, 원문은 정해진 시간 안에 온 것만. */
+  const QUEUE_READ_BUDGET_MS = 25e3;
+  async function readsFor(posts) {
+    const out = new Map();
+    const one = async (p) => {
+      try {
+        let data;
+        let from = 'pc';
+        if (p.pcRead) {
+          // 규칙이 바뀌어 본문 검사가 풀렸으면 저장된 본문으로 다시 본다 (미리보기 API 와 같게 — 걸러지면 아래에서 빠진다)
+          await recheckPcRead(p);
+          data = pcReadData(p);
+        } else {
+          from = 'site';
+          data = await readPost(p);
+          if (data.statusChanged) {
+            const fresh = store.getPost(p.id);
+            if (fresh) {
+              rescorePost(fresh);
+              store.upsertPost(fresh);
+              changed();
+            }
+          }
+        }
+        out.set(p.id, { read: summarizeRead(data, from) });
+      } catch (e) {
+        out.set(p.id, { read: null, readError: e?.busy ? '요청이 밀려 있어요' : e?.status ? `HTTP ${e.status}` : String(e?.message || e).slice(0, 100) });
+      }
+    };
+    let timer;
+    const budget = new Promise((r) => {
+      timer = setTimeout(r, QUEUE_READ_BUDGET_MS);
+    });
+    await Promise.race([Promise.all(posts.map(one)), budget]);
+    clearTimeout(timer);
+    // 시간 안에 못 받은 글은 표시만 (받던 것은 계속 받아 캐시에 남으니 다음 대기열에서는 바로 나온다)
+    for (const p of posts) if (!out.has(p.id)) out.set(p.id, { read: null, readError: '시간 초과' });
+    return out;
+  }
+
+  /**
+   * Claude 검수 결과 넣기: {model, items: [{id, verdict, shortsScore, reason, vibe?}]}
+   * verdict 가 있는 항목은 그 글의 판정(p.ai)을 통째로 바꾸고 지금 기준 표시(criteria)를 남긴다 — 이미 판정이 있어도 덮어쓴다
+   * (같은 판정 파일을 고쳐 다시 올리기, 옛 기준 다시 보기가 이걸 쓴다). 판정이 있는 글이 다시 판정되지 않게 하는 건 대기열 쪽이다:
+   * 기본 대기열은 판정 없는 글만, 다시 보기(revisit=1)는 지금 기준 표시가 없는 글만 준다.
+   * verdict 없이 vibe 만 있으면 판정은 그대로 두고 분위기 점수만 바꾼다 (기준 표시도 그대로).
+   */
   function verdicts(req) {
     const model = String(req.body?.model || 'claude').slice(0, 60);
     const at = new Date().toISOString();
@@ -453,7 +658,7 @@ export function createApi(host) {
         skipped.push(it?.id);
         continue;
       }
-      p.ai = { verdict: it.verdict, shortsScore: Math.max(0, Math.min(100, Math.round(Number(it.shortsScore) || 0))), reason: String(it.reason || '').slice(0, 60), model, at };
+      p.ai = { verdict: it.verdict, shortsScore: Math.max(0, Math.min(100, Math.round(Number(it.shortsScore) || 0))), reason: String(it.reason || '').slice(0, 60), model, at, criteria: CRITERIA_VERSION };
       if (vibeNum(it.vibe) !== undefined) p.ai.vibe = vibeNum(it.vibe);
       p.aiPending = false;
       p.aiTries = 0;
@@ -467,6 +672,12 @@ export function createApi(host) {
     store.saveNow();
     if (applied) changed();
     return ok({ applied, skipped });
+  }
+
+  async function ingest(req) {
+    const out = await ingestFromPc(req.body);
+    if (out.status === 200 && (out.body.added || out.body.statusChanged || out.body.reads.stored)) changed();
+    return res(out.status, out.body);
   }
 
   async function saveRules(req) {
@@ -572,6 +783,9 @@ export function createApi(host) {
         return requireJson(req) || requireAdmin(req) || res(202, host.crawlNow());
       case '/api/admin/verdicts':
         return requireJson(req) || requireAdmin(req) || verdicts(req);
+      case '/api/admin/ingest':
+        // PC 가 직접 받은 출처(클라우드에서 막힌 곳)의 목록·미리보기 받아 넣기 (scripts/pc-routine.js collect)
+        return requireJson(req) || requireAdmin(req) || ingest(req);
       case '/api/admin/rules':
         return requireJson(req) || requireAdmin(req) || saveRules(req);
       case '/api/admin/publish':

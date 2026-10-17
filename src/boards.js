@@ -2,6 +2,8 @@
 import * as store from './store.js';
 import { isPending, isPublic, groupKey, onePerGroup } from './store.js';
 import { vibeGuess } from './filter.js';
+import { ruleCaps } from './model/score.js';
+import { CRITERIA_VERSION } from './criteria.js';
 
 /**
  * 소소한 이야기(story)·소소한 웃음(pick) 게시판에 남겨 두는 글 수: 기간 제한 없이, 조건에 맞는 글 중 가장 최근에 들어온 N개.
@@ -9,12 +11,21 @@ import { vibeGuess } from './filter.js';
  */
 export const BOARD_KEEP = Math.max(10, Number(process.env.BOARD_KEEP) || 100);
 
-/** 소소한 웃음(pick): 공개 글 중 "그냥 웃긴" 글. Claude 판정이 있으면 그걸, 없으면 키워드 점수를 본다. */
+/** 소소한 웃음(pick): 공개 글 중 "그냥 웃긴" 글. Claude 판정이 있으면 그걸, 없으면 섞은 점수를 본다. */
 export const PICK_MIN = 65;
+/**
+ * Claude 판정이 없는 글의 대체 기준: 섞은 쇼츠 점수(filter.js shortsScore = 키워드 + 학습 점수, 수집 때마다 p.shortsScore 로 다시 매긴다).
+ * 겹 밖 검증 (키워드 판정 ok 인 사이트 글 557개, Claude 기준 양성 79): 섞은 점수 ≥ 60 은 정밀도 0.48·재현율 0.37 (60개),
+ * 예전 키워드 점수 ≥ 60 은 0.43·0.16 (30개) — 비슷한 정밀도로 두 배 넘게 찾고, 금지 소재 상한에 걸린 글 50개는 하나도 넘지 않는다 (예전 3개).
+ */
+export const PICK_FALLBACK_MIN = PICK_MIN - 5;
 export function pickWorthy(p) {
   if (p.manual === 'ok' && p.shorts) return true;
-  if (p.ai) return p.ai.verdict === 'ok' && p.ai.shortsScore >= PICK_MIN;
-  return (p.shortsScore ?? 0) >= PICK_MIN - 5;
+  // 지금 기준(STYLE.md §7) 판정은 그대로 믿고, 옛 기준 판정(기준 표시 없음)은 금지 소재 상한도 함께 본다
+  // (옛 기준이 통과시킨 친자·축의금·남녀 일반화 같은 §6.5 금지 소재가 남지 않게 — 다시 보기는 상한 걸린 글을 다시 판정하지 않는다)
+  if (p.ai) return p.ai.verdict === 'ok' && p.ai.shortsScore >= PICK_MIN && (p.ai.criteria === CRITERIA_VERSION || ruleCaps(p).funny >= PICK_FALLBACK_MIN);
+  // 저장된 점수가 예전 키워드 점수(모델을 섞기 전)로 남아 있어도 금지 소재는 들이지 않게 상한을 한 번 더 본다
+  return (p.shortsScore ?? 0) >= PICK_FALLBACK_MIN && ruleCaps(p).funny >= PICK_FALLBACK_MIN;
 }
 
 /** 글의 "소소한 이야기" 분위기 점수: 관리자 지정 > Claude 판정(ai.vibe) > 제목 어림값 */

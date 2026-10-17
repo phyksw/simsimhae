@@ -5,3 +5,5 @@ data/
 .dev.vars
 .dev.vars.*
 .wrangler/
+# PC 판정 루틴(scripts/pc-routine.js)이 만드는 판정 대기 글·그림·판정 파일
+review/

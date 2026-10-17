@@ -23,6 +23,7 @@ npm start
 | `npm run worker:dev` / `npm run worker:deploy` | 클라우드 사이트 로컬 시험 / 배포 (아래 **클라우드 사이트**) |
 | `npm run cloud:push -- <주소>` | 내 컴퓨터의 글·금지어를 클라우드 사이트로 옮기기 |
 | `node scripts/cloud-review.js <주소> queue\|apply` | 검수 대기 글 받기 / Claude 판정 올리기 (API 키 없이 이 컴퓨터에서 검수할 때) |
+| `node scripts/pc-routine.js collect\|queue\|prepare\|apply\|status` | PC 판정 루틴: 막힌 출처 수집 올리기 · 판정 파일 만들기 · 둘을 한 번에(예약 작업용) · 판정 올리기 (아래 **PC 판정 루틴**) |
 
 설정은 `.env.example` 을 `.env` 로 복사해서 바꿉니다.
 
@@ -63,6 +64,70 @@ npm start
      - API 키 없이 내 컴퓨터의 Claude Code 로 검수하려면 `node scripts/cloud-review.js <주소> queue --out queue.json` 으로 대기 글을 받고,
        판정을 `{"model": "claude-code 검수", "items": [{"id", "verdict", "shortsScore", "reason"}]}` 파일로 만들어 `node scripts/cloud-review.js <주소> apply 판정.json` 으로 올립니다.
        관리자 비밀번호로 로그인해서 부릅니다(클라우드에는 `x-admin-key` 가 없음). 검수하지 않은 글은 키워드 판정만으로 공개됩니다.
+
+## PC 판정 루틴 (운영자 PC 의 Claude 로 최종 선별)
+
+클라우드 사이트는 키워드 필터·점수 모델로 1차 선별만 하고, **최종 판정은 운영자 PC 의 Claude**(구독, API 키 없이)가 합니다.
+`scripts/pc-routine.js` 가 그 사이를 이어 줍니다. Windows PowerShell 에서 프로젝트 폴더로 가서:
+
+```powershell
+$env:CLOUD_ADMIN_PASSWORD = '<클라우드 관리자 비밀번호>'   # 없으면 data/secrets.json 의 adminPassword (이 PC 서버 비밀번호라 다를 수 있음)
+node scripts/pc-routine.js prepare   # 1) collect + queue: 막힌 출처 올리기, review/ 에 batch·그림·INSTRUCTIONS.md (끝 줄 "판정할 파일: …")
+#    → Claude Code 에게 "review/INSTRUCTIONS.md 대로 판정해 줘" (판정 파일 review/verdicts-<시각>.json 이 생김)
+node scripts/pc-routine.js apply review/verdicts-<시각>.json   # 2) 판정 올리기
+node scripts/pc-routine.js status    # 대기 수·최근 판정 시각·올리지 않은 판정 파일·PC 수집 출처 상태
+```
+
+| 명령 | 하는 일 |
+|---|---|
+| `collect` | 막힌 출처(`dogdrip`·`todayhumor`·`ppomppu`)의 목록·미리보기를 이 PC 에서 받아 올리기 |
+| `queue` | 판정 대기 글 → `review/batch-<시각>.json` + 그림 + `review/INSTRUCTIONS.md` |
+| `prepare` | `collect` 다음 `queue` (예약 작업용). 하나가 실패해도 다른 하나는 하고, 끝에 `판정 대기 N개` 와 `판정할 파일: …` 한 줄. queue 가 실패하면 종료 코드 1 |
+| `apply <판정.json>` | 판정 파일을 검사해 틀린 항목만 빼고 올리기 (뺀 수·이유, batch 에서 빠뜨린 글 수를 알림). 올릴 항목이 하나도 없으면 종료 코드 1 |
+| `status` | 판정 대기 수, 다시 볼 옛 판정 수, 최근 판정 시각, 아직 올리지 않은 판정 파일(올리는 명령 포함), PC 수집 출처 상태 |
+
+- **collect**: Cloudflare 에서 403 으로 막히는 출처의 목록 2쪽과, 아직 미리보기가 없는 글의 본문(점수 높은 순, 한 번에 최대 20개)을
+  이 PC 에서 받아 관리자 전용 `POST /api/admin/ingest` 로 올립니다. 사이트는 자기가 수집한 것과 똑같이 처리합니다(키워드 판정·중복 묶기·점수·출처 상태).
+  미리보기는 글에 붙여 두고(3일, 게시판에 남은 글은 계속) 방문자가 열 때 그대로 보여 줍니다. PC 가 13시간 안에 올린 출처는 클라우드의 자동 수집이 건너뜁니다.
+  요청 간격은 `src/lib/http.js` 그대로(같은 사이트 1.2초, 개드립 10초). 옵션 `--sources a,b --pages 2 --previews 20`.
+  클라우드는 PC 가 받는 출처의 글과 PC 미리보기가 붙은 글은 알람의 미리 준비(prefetch)에서 원문을 받으려 하지 않고(어차피 403), 규칙 재판정 때는 붙어 있는 PC 미리보기로 본문을 다시 검사합니다.
+- **queue**: `GET /api/admin/review-queue?withRead=1` 로 판정 없는 최근 7일 글을 선별 점수(`src/model/score.js` 의 점수 모델, 없으면 키워드 점수) 높은 순으로 받아
+  `review/batch-<시각>.json`(본문 앞부분·베스트 댓글·반응 수치·그림 파일 전체 경로 `imagePaths`), 본문을 받은 글의 그림(최대 3장씩, 사이트의 `/api/img` 프록시로, 안 되면 이 PC 에서 직접 —
+  개드립처럼 요청 간격이 긴 출처는 그 간격(10초)으로 글마다 1장), `review/INSTRUCTIONS.md` 를 만듭니다. 옵션 `--limit 60 --top 20`, 분위기 점수만 매길 때 `--vibe`.
+  판정할 글이 없으면 batch·그림 폴더는 만들지 않고 안내만 씁니다. 끝날 때 최근 batch 14개만 남기고 지난 batch·그림·올린 판정 파일을 지웁니다(아직 올리지 않은 판정 파일과 그 짝 batch 는 남김).
+  - 본문 채우기: 사이트는 위쪽 `--top` 개를 읽고, PC 미리보기가 있는 글은 그 밖이어도 붙여 줍니다. 그래도 본문이 없는 글(막힌 출처·`--top` 밖·사이트 시간 초과)은
+    이 PC 가 출처 어댑터로 직접 읽어 채웁니다 (요청 간격은 collect 와 같고, 출처마다 30개까지, 전체 `--read-budget 180`초(최대 86400) — 지나면 보내던 요청을 끊고 나머지는 본문 없이, `0` 이면 읽지 않음).
+    막힌 출처(`dogdrip`·`todayhumor`·`ppomppu`) 것은 미리보기로 사이트에도 올려(collect 와 같은 크기·개수 제한) 방문자 미리보기와 다음 queue 가 그대로 씁니다.
+    올린 본문의 검사로 걸러진 글은 batch 에서 빠지고, 올리기가 실패해도 batch 는 만듭니다. 못 읽은 글은 항목의 `readError` 에 까닭이 남습니다.
+  - **옛 판정 다시 보기** `--revisit [N]` (기본은 하지 않음, N 기본 30, `prepare` 에도 붙일 수 있음): 판정 기준이 바뀌기 전(잡학 = 유머 아님 등)에 판정된 글 중
+    `not_humor` 이거나 정상인데 분위기 점수가 70 아래인 글을, 점수 모델의 분위기 점수 높은 순으로 N개 batch 뒤에 넣습니다 (`GET /api/admin/review-queue?revisit=1`).
+    관리자가 상태나 소소한 이야기 넣기/빼기를 정한 글, 키워드·본문 판정이 차단·므흣인 글, 금지 소재 상한(`src/model/rules.js`)에 걸린 글, 사본은 빼고,
+    항목마다 옛 판정(`previousVerdict`)을 붙입니다. INSTRUCTIONS.md 는 "다시 보기 항목은 새 기준으로 처음부터" 판정하라고 적습니다.
+  - 판정 기준 표시: 판정을 올리면(`/api/admin/verdicts`, 사이트의 Claude 검수도) `ai.criteria` 에 지금 기준 표시(`src/criteria.js` 의 `CRITERIA_VERSION`, 지금 `style-2026-10`)가 남습니다.
+    표시가 없거나 다른 판정이 "옛 판정" 입니다. 판정 기준 문장(`src/ai.js` `CRITERIA`·`VIBE_TABLE` = `STYLE.md` §7)을 바꾸면 이 값도 바꿉니다.
+    판정 올리기는 이미 판정이 있는 글도 덮어씁니다(예전부터 그랬고, 같은 판정 파일을 고쳐 다시 올릴 때 씀). 판정된 글이 다시 판정되지 않게 하는 건 대기열입니다 —
+    기본 대기열은 판정 없는 글만, 다시 보기는 지금 기준 표시가 없는 글만 줍니다.
+- **INSTRUCTIONS.md** 는 이 파일 하나만 읽은 Claude 가 혼자 끝낼 수 있게 씁니다: 할 일 순서(이미 올린 batch 건너뛰기, 20개씩 판정하며 결과 파일 다시 쓰기, apply 한 번),
+  `src/model/STYLE.md` §7 판정 문장·점수표 그대로(파일이 없으면 `src/ai.js` 의 `CRITERIA`·`VIBE_TABLE`), §8 예시와 사이트 글에서 나온 탈락 예,
+  batch 항목에서 볼 것(제목·본문 앞부분·베스트 댓글·그림 파일), 결과 파일 이름과 apply 가 검사하는 모양, 게시판 기준 점수(`src/boards.js` 에서 읽음).
+  사이트의 Claude 검수(`src/ai.js`)도 같은 §7 문장을 씁니다 (바꾸면 새 글부터 새 기준, 이미 판정된 글은 다시 보내지 않음 — 옛 판정은 위 `--revisit` 으로 PC 가 다시 봅니다).
+- **apply**: 판정 파일 `{"model": "claude-code 검수", "items": [{"id", "verdict", "shortsScore", "vibe", "reason"}]}` 을 검사합니다 —
+  `verdict` 는 `ok|politics|hate|dark|adult|not_humor`, `shortsScore`·`vibe` 는 0~100 숫자(ok 면 둘 다 필수, ok 가 아니면 0 으로), `reason` 은 60자에서 자름, 같은 id 는 처음 것만.
+  짝 batch 에 없는 id 는 `뺌: <id> — batch 에 없는 글` 로 빼고(이미 있는 판정을 덮지 않게), 틀린 항목은 `뺌: <id> — <이유>` 로 알리고 나머지를 64KB 씩 나눠 올립니다.
+  끝에 소소한 이야기 조건(ok + shortsScore·vibe 기준 점수, `src/boards.js`)에 드는 글 수와 제목을 한 줄로 찍습니다.
+  판정 파일은 UTF-8(BOM 있어도 됨)이나 UTF-16(BOM 있음)이어야 하고, PowerShell 5.1 의 `Set-Content` 기본(CP949)으로 쓴 파일은 한글이 깨지지 않게 거절합니다.
+  올린 판정 파일은 `review/state.json` 의 `appliedFiles`(최근 200개, 밀려난 것은 `appliedUpTo` 기준선으로 — 그보다 오래된 판정 파일은 올린 것으로 침)에 남아,
+  다음 `queue`·`prepare` 가 "아직 올리지 않은 판정 파일" 을 안내 맨 앞에 적습니다 (콘솔에도 같은 올리는 명령을, 폴더·사이트가 기본이 아니면 `--dir`·`--site` 까지 붙여 찍습니다).
+  다른 사이트에서 받은 batch 의 판정 파일은 "먼저 할 일" 에 넣지 않고 따로 알리고, 올릴 항목이 하나도 없던(모두 형식 오류·읽지 못함) 판정 파일은 `failedFiles` 에 남아
+  고쳐 저장하기 전까지 "먼저 할 일" 에서 빠집니다(`status` 의 `올리지 못한 판정 파일`). `state.json` 이 없거나 깨졌으면 가장 최근 판정 파일 하나만 "아직 올리지 않음" 으로 봅니다.
+- **점수 모델 다시 학습**: `node scripts/train-rule-model.js --report` (기본 `data/posts.json`, 읽기만) 또는
+  판정이 든 글 파일로 `node scripts/train-rule-model.js --posts <판정 사본> --report` → `src/model/weights.json`.
+  클라우드에 올린 판정(`apply`·`--revisit` 포함)은 클라우드에만 쌓이고 `data/posts.json` 에는 들어오지 않으므로, 새 판정으로 학습하려면 판정이 든 사본을 따로 만들어 넘겨야 합니다
+  (만드는 법과 주의는 `src/model/MODEL.md` 의 "다시 학습하기"). 판정 글이 50개보다 적으면 학습 스크립트는 파일을 쓰지 않고 실패합니다.
+- 공통: `--site <주소>`(기본 `https://simsimhae.palebluedot13.workers.dev`), `--dir <폴더>`(기본 `review/`, git 에 올리지 않음). 비밀번호는 화면에 찍지 않습니다.
+  batch 는 받은 사이트를 기억합니다: 기본 사이트가 아니면 INSTRUCTIONS.md 의 올리는 명령에 `--site` 가 붙고, `apply` 는 batch 를 받은 사이트가 아닌 곳에는 올리지 않습니다 (시험 사이트의 판정이 운영 사이트에 들어가지 않게).
+- **예약 작업**: `scripts/pc-routine-task.md` 의 지시문을 Claude 예약 작업에 붙여 넣으면 `prepare → 판정 → 결과 파일 → apply → status` 를 돌고 보고합니다
+  (실패하면 멈추고 보고, 비밀번호는 출력하지 않음). 하루 2번 이상(12시간 간격 이하)이면 막힌 출처도 끊기지 않습니다 (PC 가 꺼져 있으면 13시간 뒤부터 클라우드가 다시 직접 시도).
 
 ## 출처 추가·수정
 

@@ -197,7 +197,7 @@ export class SiteDO extends DurableObject {
 
   /**
    * 소소한 이야기 → 웃긴 것만 글 중 미리보기가 없는 것을 몇 개 미리 가져온다 (방문자가 열 때 기다리지 않게).
-   * - 수집을 끈 출처, 이번 수집에서 목록을 못 받은 출처의 글은 가져오지 않는다.
+   * - 수집을 끈 출처, 이번 수집에서 목록을 못 받은 출처, PC 가 받아 넣는 출처(crawler.pcFed)의 글과 PC 미리보기가 붙은 글은 가져오지 않는다.
    * - 못 가져온 글은 점점 늦게 몇 번만 다시 시도한다. 실패 기록은 실패할 때마다 바로 저장한다 (알람이 도중에 끊겨도 남게).
    * - 한 번에 시도하는 수는 성공 목표의 두 배까지, 시간은 알람 시작부터 budgetMs 까지.
    * @param {number} before 이번 알람이 시작될 때의 요청 수 (요청 상한을 넘지 않게)
@@ -235,7 +235,8 @@ export class SiteDO extends DurableObject {
         if (done >= limit || tries >= limit * 2) break;
         if (Date.now() - startedAt > budgetMs) break;
         if (requestCount() - before >= config.cloud.requestBudget) break;
-        if (!active.has(p.source) || listFailed(p.source) || busy.has(p.source) || hasCached(p.id)) continue;
+        // PC 가 받아 넣는 출처(여기서는 403)와 PC 미리보기가 붙은 글은 원문을 받지 않는다 — 방문자 미리보기는 PC 미리보기로 나간다
+        if (!active.has(p.source) || listFailed(p.source) || crawler.pcFed(p.source) || p.pcRead || busy.has(p.source) || hasCached(p.id)) continue;
         const f = fails[p.id];
         if (f && (f.n >= PREFETCH_FAIL_MAX || f.nextAt > now)) continue;
         tries++;

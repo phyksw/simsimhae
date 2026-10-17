@@ -11,6 +11,8 @@
 //   imageHosts: ['example.com', 'img.example.net'], // 이미지 프록시 허용 호스트 (접미사 일치)
 //   referer: 'https://example.com/',     // 이미지를 프록시로 가져올 때 보낼 Referer (핫링크 차단 우회)
 //   strictness: 'normal',                // 'normal' | 'strict' — 정치/혐오글이 많이 섞이는 소스는 'strict'
+//   crawlDelayMs: 10_000,                // (선택) robots.txt Crawl-delay 처럼 같은 사이트 요청 간격이 기본(1.2초)보다 길어야 하면.
+//                                        //   list/read 안에서는 fetchHtml(…, { interval }) 로 직접 지키고, 이 칸은 다른 곳(PC 판정 루틴의 그림 받기)이 본다
 //   disabled: false,                     // 안정적으로 수집할 수 없으면 true + disabledReason
 //   disabledReason: null,
 //   async list(page = 1) { ... },        // → ListItem[]  (게시판 목록 page 번째 페이지, 공지/광고 제외)
