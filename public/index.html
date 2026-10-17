@@ -83,7 +83,18 @@
       <header class="reader-head">
         <div class="reader-meta" id="reader-meta"></div>
         <h2 id="reader-title"></h2>
-        <div class="reader-actions" id="reader-actions"></div>
+        <div class="reader-tools">
+          <div class="reader-actions" id="reader-actions"></div>
+          <!-- 보기 크기·화면 맞춤: 글마다 다시 그리지 않는 고정 줄 (app.js 의 applyReaderView 가 숫자·상태를 맞춘다) -->
+          <div class="reader-view" id="reader-view" role="group" aria-label="보기">
+            <button class="rv-step" type="button" id="rv-out" aria-label="작게" aria-keyshortcuts="-" title="작게 (-)">−</button>
+            <button class="rv-num" type="button" id="rv-reset" aria-keyshortcuts="0" title="100%로 (0)">100%</button>
+            <button class="rv-step" type="button" id="rv-in" aria-label="크게" aria-keyshortcuts="+" title="크게 (+)">+</button>
+            <button class="rv-fit" type="button" id="rv-fit" aria-pressed="false" aria-keyshortcuts="F" title="그림을 화면 높이에 맞춤 (F)">화면 맞춤</button>
+          </div>
+          <!-- 바뀐 보기 크기를 스크린리더에 알린다 (대화 상자 안이라 inert 가 아니다) -->
+          <p class="sr-only" id="rv-status" role="status"></p>
+        </div>
         <button class="icon-btn close" type="button" data-close aria-label="닫기">✕</button>
       </header>
       <div class="reader-admin" id="reader-admin" hidden></div>

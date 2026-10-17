@@ -39,6 +39,10 @@ const store = {
   },
 };
 
+/** 미리보기 보기 크기 단계(%). 저장된 값이 이 목록에 없으면(옛 값·잘못된 값) 100 */
+const READER_ZOOMS = [50, 60, 70, 80, 90, 100, 115, 130, 150];
+const readerZoomOf = (v) => (READER_ZOOMS.includes(v) ? v : 100);
+
 const state = {
   meta: null,
   sources: {},
@@ -56,6 +60,8 @@ const state = {
   theme: store.get('hg.theme', 'auto'),
   showSource: store.get('hg.showSource', true),
   adminOpen: store.get('hg.adminOpen', true),
+  readerZoom: readerZoomOf(store.get('hg.readerZoom', 100)), // 미리보기 보기 크기(%)
+  readerFit: store.get('hg.readerFit', false) === true, // 미리보기 그림·영상을 화면 높이에 맞춤
 };
 
 const STAGES = { candidate: '후보', script: '대본 작성', done: '촬영 완료' };
@@ -959,6 +965,130 @@ function renderReaderAdmin(p, draft) {
   );
 }
 
+// ---------- 미리보기 보기 크기·화면 맞춤 ----------
+// 머리의 고정 줄(#reader-view)과 .reader 의 --rz·zoomed·fit 으로만 바꾼다. 글을 다시 그려도 그대로 남는다.
+/** 지금 설정을 화면에 맞춘다 (시작할 때 한 번, 바꿀 때마다) */
+function applyReaderView() {
+  const sheet = $('#reader .reader');
+  const z = state.readerZoom;
+  sheet.style.setProperty('--rz', String(z / 100));
+  sheet.classList.toggle('zoomed', z !== 100);
+  sheet.classList.toggle('fit', state.readerFit);
+  updateFitHeight();
+  // 끝에 닿아도 disabled 대신 aria-disabled: 포커스가 그 자리에 남아(사라지거나 옆 버튼으로 옮겨지지 않게),
+  // 이어 누른 Enter·누르고 있는 반복은 아무것도 하지 않는다 (stepReaderZoom 이 범위 끝에서 그대로 둔다)
+  $('#rv-out').setAttribute('aria-disabled', String(z <= READER_ZOOMS[0]));
+  $('#rv-in').setAttribute('aria-disabled', String(z >= READER_ZOOMS[READER_ZOOMS.length - 1]));
+  const num = $('#rv-reset');
+  num.textContent = `${z}%`;
+  num.setAttribute('aria-label', `보기 크기 ${z}%, 누르면 100%`);
+  $('#rv-fit').setAttribute('aria-pressed', String(state.readerFit));
+}
+
+/**
+ * 화면 맞춤 높이: 보이는 화면 높이에서 위아래 여유를 뺀 값.
+ * vh 대신 px 로 넣는다 — zoom 안의 px 는 어느 브라우저나 같은 비율로 줄어들어, CSS 에서 --rz 로 나누면 화면 기준이 된다.
+ */
+/**
+ * 화면 맞춤에서 빼는 세로로 아주 긴 그림 (높이 ÷ 너비가 이보다 큰 것): 한 화면에 넣으면 글씨를 못 읽을 만큼 가늘어져서
+ * (예: 540×10000 캡처 → 폭 39px) 긴 캡처는 원래 폭으로 내려 읽게 둔다. 그림이 다 받아진 뒤 크기를 보고 data-tall 을 붙인다.
+ */
+const FIT_TALL_RATIO = 2.2;
+function markTallImage(img) {
+  if (img?.tagName !== 'IMG' || !img.naturalWidth || !img.naturalHeight) return;
+  if (img.naturalHeight / img.naturalWidth > FIT_TALL_RATIO) img.setAttribute('data-tall', '');
+  else img.removeAttribute('data-tall');
+}
+
+let fitHeight = '';
+function updateFitHeight() {
+  const v = `${Math.max(200, Math.round((window.innerHeight || 800) - 32))}px`;
+  if (v === fitHeight) return;
+  fitHeight = v;
+  $('#reader .reader').style.setProperty('--fit-h', v);
+}
+
+/** [요소, 'top' | 'bottom'] 경계의 지금 화면 위치 */
+const edgeY = ([el, side]) => el.getBoundingClientRect()[side];
+
+/**
+ * 화면 가운데 줄(y)이 미리보기의 어디인지 요소 경계로 적는다: 두 경계(lo·hi) 사이의 비율 f.
+ * 본문·댓글은 y 에 걸친 요소 안으로 가장 깊이 들어가고, 요소 사이(여백, 글자 줄)면 바로 위 요소의 아래 끝 ~
+ * 바로 아래 요소의 위 끝 사이로 잡는다 (없으면 감싼 요소의 끝). 그림 하나만 줄어도, 글이 다시 줄바꿈해도 같은 내용을 가리킨다.
+ * 머리·관리 줄·꼬리는 안으로 들어가지 않는다 — 닫기 ✕·휴대폰 보기 줄처럼 화면에 고정된 요소가 있다.
+ */
+function readerPlaceAt(y) {
+  let box = $('#reader .reader');
+  for (;;) {
+    let inside = null;
+    let above = null;
+    let below = null;
+    for (let el = box.firstElementChild; el; el = el.nextElementSibling) {
+      const r = el.getBoundingClientRect();
+      if (!r.width && !r.height) continue; // 숨은 요소
+      if (r.top <= y && y < r.bottom) {
+        inside = el;
+        break;
+      }
+      if (r.bottom <= y && (!above || r.bottom > above.r.bottom)) above = { el, r };
+      if (r.top > y && (!below || r.top < below.r.top)) below = { el, r };
+    }
+    if (inside && !inside.matches('img, video, iframe, svg, picture, canvas') && inside.closest('#reader-body, #reader-comments')) {
+      box = inside;
+      continue;
+    }
+    const lo = inside ? [inside, 'top'] : above ? [above.el, 'bottom'] : [box, 'top'];
+    const hi = inside ? [inside, 'bottom'] : below ? [below.el, 'top'] : [box, 'bottom'];
+    const a = edgeY(lo);
+    const span = edgeY(hi) - a;
+    // 두 경계가 붙어 있으면(높이 0) 비율 대신 lo 에서의 거리
+    return span > 0 ? { lo, hi, f: (y - a) / span } : { lo, hi, d: y - a };
+  }
+}
+
+/**
+ * 크기·화면 맞춤을 바꿔도 읽던 자리(화면 가운데에 있던 내용)를 지킨다.
+ * 전체 높이 비율로는 안 된다 — 화면 맞춤은 긴 그림만 크게 줄이므로, 가운데에 있던 요소 경계를 기준으로 맞춘다.
+ * 바뀐 뒤의 실제 위치를 다시 재서 차이만큼만 고치므로, 브라우저 기본 스크롤 앵커링이 먼저 움직였어도 두 번 움직이지 않는다.
+ */
+function keepReaderPlace(change) {
+  const ov = $('#reader');
+  if (ov.hidden || !(ov.scrollTop > 0)) return change(); // 맨 위면 맨 위 그대로
+  const y = ov.getBoundingClientRect().top + ov.clientHeight / 2;
+  const place = readerPlaceAt(y);
+  change();
+  if (!place.lo[0].isConnected || !place.hi[0].isConnected) return;
+  const a = edgeY(place.lo);
+  const now = 'f' in place ? a + place.f * (edgeY(place.hi) - a) : a + place.d;
+  ov.scrollTop = Math.max(0, ov.scrollTop + (now - y));
+}
+
+/** patch: { zoom?: 50~150, fit?: boolean }. 바뀐 값만 저장한다 (저장소가 막혀도 화면은 바뀐다) */
+function setReaderView(patch) {
+  const zoom = readerZoomOf(patch.zoom ?? state.readerZoom);
+  const fit = patch.fit ?? state.readerFit;
+  if (zoom === state.readerZoom && fit === state.readerFit) return;
+  const zoomChanged = zoom !== state.readerZoom;
+  keepReaderPlace(() => {
+    state.readerZoom = zoom;
+    state.readerFit = fit;
+    applyReaderView();
+  });
+  // 바뀐 크기를 스크린리더에 알린다 (포커스는 −/+ 에 있고 숫자는 옆 버튼에만 바뀌므로). 시작할 때는 알리지 않는다
+  if (zoomChanged) $('#rv-status').textContent = `${zoom}%`;
+  if ('zoom' in patch) store.set('hg.readerZoom', zoom);
+  if ('fit' in patch) store.set('hg.readerFit', fit);
+}
+
+/** dir: -1 한 단계 작게, +1 한 단계 크게, 0 이면 100% (범위 끝에서는 그대로) */
+function stepReaderZoom(dir) {
+  const i = READER_ZOOMS.indexOf(state.readerZoom);
+  const zoom = dir === 0 ? 100 : READER_ZOOMS[Math.min(READER_ZOOMS.length - 1, Math.max(0, i + dir))];
+  setReaderView({ zoom });
+}
+
+const toggleReaderFit = () => setReaderView({ fit: !state.readerFit });
+
 // ---------- 모달 공용 ----------
 let lastFocus = null; // 첫 모달을 열 때 포커스가 있던 곳. 모두 닫히면 되돌린다
 const anyOverlayOpen = () => $$('.overlay').some((o) => !o.hidden);
@@ -1028,6 +1158,21 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   const open = $$('.overlay').filter((o) => !o.hidden).pop();
   if (open) requestClose(open);
+});
+// 미리보기 단축키: - 작게, + / = 크게, 0 은 100%, f(한글 자판에서는 ㄹ) 화면 맞춤.
+// 미리보기가 맨 위에 열려 있을 때만. 입력칸 안, Ctrl/⌘/Alt 조합(브라우저 확대 등)은 건드리지 않는다.
+const READER_ZOOM_KEYS = new Map([['-', -1], ['+', 1], ['=', 1], ['0', 0]]);
+const READER_FIT_KEYS = new Set(['f', 'F', 'ㄹ']);
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.defaultPrevented) return;
+  const top = $$('.overlay').filter((o) => !o.hidden).pop();
+  if (!top || top.id !== 'reader') return;
+  if (e.target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+  if (READER_ZOOM_KEYS.has(e.key)) stepReaderZoom(READER_ZOOM_KEYS.get(e.key));
+  else if (READER_FIT_KEYS.has(e.key)) {
+    if (!e.repeat) toggleReaderFit(); // 누르고 있어도 켜졌다 꺼졌다 반복하지 않게
+  } else return;
+  e.preventDefault();
 });
 // 미리보기가 열린 채 뒤로가기 → 미리보기만 닫는다
 window.addEventListener('popstate', () => {
@@ -1380,6 +1525,16 @@ function bind() {
     }
   });
 
+  // 미리보기 보기 크기·화면 맞춤 (고정 줄이라 여기서 한 번만 붙인다)
+  const zoomBtn = (sel, dir) => $(sel).addEventListener('click', () => stepReaderZoom(dir));
+  zoomBtn('#rv-out', -1);
+  zoomBtn('#rv-in', 1);
+  zoomBtn('#rv-reset', 0);
+  $('#rv-fit').addEventListener('click', toggleReaderFit);
+  window.addEventListener('resize', updateFitHeight);
+  // load 는 버블링하지 않으니 캡처 단계에서 받는다 (본문을 다시 그려도 그대로)
+  $('#reader-body').addEventListener('load', (e) => markTallImage(e.target), true);
+
   // 관리자
   $('#btn-admin').addEventListener('click', async () => {
     if (isPublic()) return; // 공개 사이트에는 관리자 기능이 없다
@@ -1479,6 +1634,7 @@ function bind() {
 // ---------- 시작 ----------
 applyTheme();
 applySourceVisibility();
+applyReaderView();
 bind();
 try {
   await loadMeta();

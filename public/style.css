@@ -315,6 +315,70 @@ code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-
 .reader-foot { padding: 12px 20px 18px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; font-size: 13px; }
 .reader-foot-actions { display: inline-flex; gap: 6px; }
 .notice { padding: 10px 12px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); font-size: 14px; }
+.reader-body pre { max-width: 100%; overflow-x: auto; }
+
+/* ---------- 미리보기 보기 크기(− 100% +)·화면 맞춤 ---------- */
+/* 머리 줄: 왼쪽 원문 보기 등, 오른쪽 보기 조절. 좁으면 다음 줄로 (닫기 ✕ 자리는 .reader-head 오른쪽 여백이 지킨다) */
+.reader-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.reader-view { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 3px; border-radius: 11px; background: var(--surface-2); }
+.reader-view button {
+  min-width: 34px; height: 34px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; cursor: pointer;
+  color: var(--text); font-size: 14px; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;
+  touch-action: manipulation; /* 빠르게 연달아 눌러도 휴대폰이 화면을 두 번 탭 확대하지 않게 */
+}
+/* 끝(50%·150%)의 −/+ 는 disabled 대신 aria-disabled (포커스가 그 자리에 남게) */
+.reader-view button:hover:not([aria-disabled='true']) { background: var(--surface); }
+.reader-view button[aria-disabled='true'] { opacity: 0.35; cursor: default; }
+.reader-view button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.reader-view .rv-step { font-size: 20px; line-height: 1; }
+.reader-view .rv-num { min-width: 54px; color: var(--text-2); }
+/* 바뀐 크기·켜진 화면 맞춤: 글자는 본문 색(밝은 화면에서도 대비 충분), 상태는 옅은 강조 바탕과 강조색 테두리로 */
+.reader.zoomed .reader-view .rv-num { color: var(--text); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.reader-view .rv-fit { margin-left: 3px; padding: 0 11px; }
+.reader-view .rv-fit[aria-pressed='true'] { background: var(--accent-soft); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
+@media (max-width: 640px) {
+  /* 휴대폰: 단축키가 없으니 보기 줄을 화면 아래 가운데에 고정해 긴 글 중간에서도 바로 조절 (머리 오른쪽 60px 는 그대로 닫기 ✕ 자리) */
+  .reader-view {
+    position: fixed; z-index: 3; left: 0; right: 0; bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    width: max-content; max-width: calc(100vw - 24px); margin: 0 auto;
+    border: 1px solid var(--line); background: var(--surface-2); box-shadow: var(--shadow);
+  }
+  /* 고정된 보기 줄이 마지막 줄(출처·원문 링크)을 가리지 않게 */
+  .reader-foot { padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* app.js 가 .reader 에 --rz(0.5~1.5), 100% 가 아니면 .zoomed, 화면 맞춤이면 .fit, --fit-h(보이는 화면 높이, px)를 넣는다.
+   --rzc 는 본문에 zoom 이 걸렸을 때만 --rz (zoom 안에서는 px 도 함께 줄어드니 화면 기준 길이는 이걸로 나눈다) */
+.reader { --rz: 1; --rzc: 1; }
+/* 작게·크게: 그림·영상·iframe 은 상자 폭 × 비율을 넘지 않고(큰 캡처도 함께 줄게), 가운데로 */
+.reader.zoomed .reader-body img, .reader.zoomed .reader-body video, .reader.zoomed .reader-body iframe {
+  max-width: min(100%, calc(100% * var(--rz))); margin-left: auto; margin-right: auto;
+}
+.reader.zoomed .reader-body iframe { display: block; }
+@supports (zoom: 1) {
+  /* 글자·그림·간격을 같은 비율로 (브라우저 확대처럼 줄바꿈도 다시). 본문은 좌우 여백만 원래 크기로 되돌려 제목 줄과 맞춘다.
+     댓글은 목록(.cm-body)만 — 펼치기 버튼은 그대로 눌러지게 */
+  .reader.zoomed { --rzc: var(--rz); }
+  .reader.zoomed .reader-body, .reader.zoomed .cm-body { zoom: var(--rz); }
+  .reader.zoomed .reader-body { padding-left: calc(20px / var(--rz)); padding-right: calc(20px / var(--rz)); }
+  @media (max-width: 640px) {
+    .reader.zoomed .reader-body { padding-left: calc(16px / var(--rz)); padding-right: calc(16px / var(--rz)); }
+  }
+}
+@supports not (zoom: 1) {
+  /* zoom 을 모르는 옛 브라우저(Firefox 125 이하): 글자 크기만 비율대로 (그림은 위의 폭 비율로) */
+  .reader.zoomed .reader-body { font-size: calc(16px * var(--rz)); }
+  .reader.zoomed .cm-text { font-size: calc(15px * var(--rz)); }
+}
+/* 화면 맞춤: 본문 그림·영상 하나하나가 보이는 화면 높이 안에 통째로 (가로 비율 유지, 가운데). 글자는 그대로.
+   width 를 auto 로 둬야 원문의 width 속성 때문에 세로만 눌리지 않는다. 세로로 아주 긴 캡처(data-tall, app.js)는 빼고 내려 읽게 */
+.reader.fit .reader-body img:not([data-tall]), .reader.fit .reader-body video {
+  width: auto; height: auto; max-height: calc(var(--fit-h, 90vh) / var(--rzc)); margin-left: auto; margin-right: auto;
+}
+.reader.fit .reader-body iframe {
+  display: block; margin-left: auto; margin-right: auto;
+  max-width: min(100%, calc(100% * var(--rz)), calc(var(--fit-h, 90vh) / var(--rzc) * 16 / 9));
+}
 
 .toast {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 80;

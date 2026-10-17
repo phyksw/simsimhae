@@ -139,7 +139,12 @@ class FElement extends FNode {
     this.children = [];
     this.ownerDocument = doc;
     this._win = doc._win;
-    this.style = {};
+    // style.setProperty('--x', …) (CSS 변수) 도 받는다. 값은 그대로 같은 이름의 속성으로 남긴다
+    this.style = Object.defineProperties({}, {
+      setProperty: { value(k, v) { this[k] = String(v); } },
+      getPropertyValue: { value(k) { return this[k] ?? ''; } },
+      removeProperty: { value(k) { delete this[k]; } },
+    });
     this.inert = false;
     const el = this;
     const key = (p) => `data-${String(p).replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
@@ -168,6 +173,14 @@ class FElement extends FNode {
   }
   get tagName() {
     return this.name.toUpperCase();
+  }
+  // children 은 css-select 가 쓰는 대로 글자 노드까지 담는다. 요소만 따라가는 길은 실제 DOM 처럼 이 둘로
+  get firstElementChild() {
+    return this.children.find((n) => n.type === 'tag') || null;
+  }
+  get nextElementSibling() {
+    const sib = this.parent?.children || [];
+    return sib.slice(sib.indexOf(this) + 1).find((n) => n.type === 'tag') || null;
   }
   get id() {
     return this.attribs.id || '';
@@ -482,7 +495,8 @@ const HOOK = `globalThis.__app = {
 };
 `;
 
-async function boot({ hash = '', server = makeServer(), scrollY = 0 } = {}) {
+// stored: 처음부터 localStorage 에 있던 값 { 키: JSON 문자열 }. brokenStorage: 읽기·쓰기가 모두 예외 (사생활 보호 모드 등)
+async function boot({ hash = '', server = makeServer(), scrollY = 0, stored = {}, brokenStorage = false } = {}) {
   const marker = '// ---------- 시작 ----------';
   assert.ok(APP_SRC.includes(marker), 'app.js 의 시작 구역 표시가 바뀌었어요 (테스트 훅 위치)');
   const src = `(async () => { 'use strict';\n${APP_SRC.replace(marker, `${HOOK}${marker}`)}\n})()`;
@@ -550,7 +564,10 @@ async function boot({ hash = '', server = makeServer(), scrollY = 0 } = {}) {
     },
   };
 
-  const storage = new Map();
+  const storage = new Map(Object.entries(stored));
+  const blocked = () => {
+    throw new Error('SecurityError: 저장소를 쓸 수 없어요');
+  };
   const sources = [];
   class FakeEventSource {
     constructor(url) {
@@ -581,10 +598,12 @@ async function boot({ hash = '', server = makeServer(), scrollY = 0 } = {}) {
     Event: FakeEvent,
     Node: FNode,
     CSS: { escape: (s) => String(s).replace(/["\\]/g, '\\$&') },
-    localStorage: {
-      getItem: (k) => (storage.has(k) ? storage.get(k) : null),
-      setItem: (k, v) => storage.set(k, String(v)),
-    },
+    localStorage: brokenStorage
+      ? { getItem: blocked, setItem: blocked }
+      : {
+          getItem: (k) => (storage.has(k) ? storage.get(k) : null),
+          setItem: (k, v) => storage.set(k, String(v)),
+        },
     navigator: { clipboard: { writeText: async () => {} } },
     confirmAnswer: true,
     confirm: () => ctx.confirmAnswer,
@@ -626,6 +645,8 @@ async function boot({ hash = '', server = makeServer(), scrollY = 0 } = {}) {
     ctx,
     app: ctx.__app,
     doc,
+    win,
+    storage,
     server,
     clock,
     history,
@@ -641,9 +662,12 @@ async function boot({ hash = '', server = makeServer(), scrollY = 0 } = {}) {
       location.hash = h;
       await clock.advance(0);
     },
-    key: async (key) => {
-      (doc.activeElement || doc.body).dispatchEvent(new FakeEvent('keydown', { key, bubbles: true }));
+    // init: { ctrlKey, metaKey, altKey, repeat … }. 보낸 이벤트를 돌려준다 (preventDefault 확인용)
+    key: async (key, init = {}) => {
+      const ev = new FakeEvent('keydown', { key, bubbles: true, ...init });
+      (doc.activeElement || doc.body).dispatchEvent(ev);
       await clock.advance(0);
+      return ev;
     },
     type: async (el, value) => {
       el.value = value;
@@ -1531,4 +1555,493 @@ test('frontend(로컬 관리자): 지금 수집은 예전처럼 SSE 로 기다�
   v.$('#btn-admin').click();
   await v.clock.advance(50);
   assert.match(v.$('#pw-desc').textContent, /실시간 수집/);
+});
+
+// ================================================================ 미리보기 보기 크기·화면 맞춤
+const readerSheet = (t) => t.$('#reader .reader');
+const zoomText = (t) => t.$('#rv-reset').textContent;
+async function openNth(t, i = 0) {
+  t.app.openReader(t.server.list('all')[i]);
+  await t.clock.advance(0);
+}
+
+test('frontend(보기 크기): 조절 줄은 미리보기 머리에 하나, 여러 번 열고 다시 그려도 늘지 않고 이벤트도 한 번', async () => {
+  const t = await boot({ hash: '#/b/all', server: makeServer({ admin: true }) }); // 관리자: renderReader 가 버튼을 더 그린다
+  for (const i of [0, 1, 0]) {
+    await openNth(t, i);
+    t.app.closeOverlay(t.$('#reader'));
+    await t.clock.advance(0);
+  }
+  await openNth(t, 2);
+  assert.equal(t.$$('.reader-view').length, 1);
+  const bar = t.$('#reader-view');
+  assert.ok(bar.closest('.reader-head'), '미리보기 머리 안');
+  assert.equal(bar.closest('#reader-actions'), null, '글마다 통째로 바뀌는 #reader-actions 밖');
+  assert.deepEqual(t.$$('#reader-view button').map((b) => b.textContent), ['−', '100%', '+', '화면 맞춤']);
+  for (const id of ['#rv-out', '#rv-reset', '#rv-in', '#rv-fit']) assert.equal(t.$(id)._ls.count('click'), 1, `${id} 클릭 이벤트는 하나`);
+  // 한 번 누르면 한 단계만 (이벤트가 겹쳐 붙었으면 여러 단계 움직인다)
+  t.$('#rv-out').click();
+  assert.equal(zoomText(t), '90%');
+  t.$('#rv-fit').click();
+  assert.equal(t.$('#rv-fit').getAttribute('aria-pressed'), 'true', '두 번 붙었으면 켜졌다 바로 꺼진다');
+  assert.equal(t.$('#reader').hidden, false, '조절 버튼은 미리보기를 닫지 않는다');
+  // 다른 창에는 조절 줄이 없다
+  for (const id of ['#pw-modal', '#settings-modal', '#rules-modal']) assert.equal(t.$(`${id} .reader-view`), null, id);
+});
+
+test('frontend(보기 크기): − / + 는 50~150% 단계, 끝에서 aria-disabled(포커스는 그 자리), 가운데 숫자는 100%로', async () => {
+  const t = await boot({ hash: '#/b/all' });
+  await openNth(t);
+  const sheet = readerSheet(t);
+  const off = (id) => t.$(id).getAttribute('aria-disabled');
+  // Enter·Space 는 포커스가 있는 버튼에 click 으로 간다 (누르고 있으면 반복)
+  const enter = () => t.doc.activeElement.click();
+  assert.equal(zoomText(t), '100%');
+  assert.equal(sheet.classList.contains('zoomed'), false);
+  assert.equal(sheet.style.getPropertyValue('--rz'), '1');
+  assert.equal(off('#rv-out'), 'false');
+  assert.equal(off('#rv-in'), 'false');
+
+  const seen = [];
+  t.$('#rv-out').focus();
+  for (let i = 0; i < 7; i++) {
+    enter();
+    seen.push(zoomText(t));
+  }
+  assert.deepEqual(seen, ['90%', '80%', '70%', '60%', '50%', '50%', '50%'], '끝에 닿은 뒤 이어 누른 Enter 는 100%로 되돌리지 않는다');
+  assert.equal(off('#rv-out'), 'true', '50% 에서 − 비활성 표시');
+  assert.equal(off('#rv-in'), 'false');
+  assert.equal(sheet.classList.contains('zoomed'), true);
+  assert.equal(sheet.style.getPropertyValue('--rz'), '0.5');
+  assert.equal(t.doc.activeElement, t.$('#rv-out'), '포커스는 − 에 그대로');
+  for (const id of ['#rv-out', '#rv-in']) assert.equal(t.$(id).disabled, false, `${id} 는 disabled 가 아니다 (포커스가 빠지지 않게)`);
+  assert.equal(t.storage.get('hg.readerZoom'), '50');
+  assert.match(t.$('#rv-reset').getAttribute('aria-label'), /50%/);
+
+  t.$('#rv-reset').click();
+  assert.equal(zoomText(t), '100%');
+  assert.equal(sheet.classList.contains('zoomed'), false);
+  assert.equal(sheet.style.getPropertyValue('--rz'), '1');
+  assert.equal(off('#rv-out'), 'false');
+
+  seen.length = 0;
+  t.$('#rv-in').focus();
+  for (let i = 0; i < 5; i++) {
+    enter();
+    seen.push(zoomText(t));
+  }
+  assert.deepEqual(seen, ['115%', '130%', '150%', '150%', '150%']);
+  assert.equal(off('#rv-in'), 'true', '150% 에서 + 비활성 표시');
+  assert.equal(t.doc.activeElement, t.$('#rv-in'), '포커스는 + 에 그대로');
+  assert.equal(sheet.style.getPropertyValue('--rz'), '1.5');
+  assert.equal(t.storage.get('hg.readerZoom'), '150');
+
+  // 미리보기 글 상자에만 붙는다 (목록·다른 창은 그대로)
+  assert.equal(t.$$('.zoomed').length, 1);
+  assert.equal(t.$$('.zoomed')[0], sheet);
+  assert.equal(t.$('#posts').closest('.zoomed'), null);
+});
+
+test('frontend(보기 크기): 단축키로 끝에 닿아도 −/+ 의 포커스가 사라지지 않고, 바뀐 크기는 status 로 알린다 (시작할 때는 조용히)', async () => {
+  const t = await boot({ hash: '#/b/all', stored: { 'hg.readerZoom': '80' } });
+  const status = t.$('#rv-status');
+  assert.equal(status.getAttribute('role'), 'status');
+  assert.ok(status.closest('#reader .reader[role="dialog"]'), '미리보기 대화 상자 안 (뒤 화면처럼 inert 가 되지 않는다)');
+  assert.equal(status.textContent, '', '저장된 크기를 맞출 때는 알리지 않는다');
+  await openNth(t);
+  assert.equal(status.textContent, '', '여는 것만으로는 알리지 않는다');
+
+  t.$('#rv-in').focus();
+  for (const want of ['90%', '100%', '115%', '130%', '150%']) {
+    await t.key('+');
+    assert.equal(status.textContent, want);
+  }
+  assert.equal(t.$('#rv-in').getAttribute('aria-disabled'), 'true');
+  assert.equal(t.$('#rv-in').disabled, false);
+  assert.equal(t.doc.activeElement, t.$('#rv-in'), '단축키로 끝에 닿아도 포커스는 + 에');
+  // 바뀌지 않으면(끝에서 또 누름) 그대로, 화면 맞춤은 크기를 알리지 않는다 (버튼의 aria-pressed 가 알린다)
+  status.textContent = '';
+  await t.key('+');
+  assert.equal(status.textContent, '');
+  t.$('#rv-fit').click();
+  assert.equal(status.textContent, '');
+  t.$('#rv-out').click();
+  assert.equal(status.textContent, '130%', '버튼으로 바꿔도 알린다');
+  t.$('#rv-out').focus();
+  for (let i = 0; i < 8; i++) await t.key('-');
+  assert.equal(zoomText(t), '50%');
+  assert.equal(t.doc.activeElement, t.$('#rv-out'), '− 쪽 끝도 마찬가지');
+  assert.equal(status.textContent, '50%');
+  // 토스트(방송 화면에 보이는 글자)는 쓰지 않는다
+  assert.equal(t.toastText(), '');
+});
+
+test('frontend(화면 맞춤): 세로로 아주 긴 캡처(높이 ÷ 너비 > 2.2)는 다 받아진 뒤 data-tall 을 붙여 맞춤에서 뺀다', async () => {
+  const t = await boot({ hash: '#/b/all' });
+  await openNth(t);
+  const body = t.$('#reader-body');
+  const img = (w, hgt) => {
+    const el = t.doc.createElement('img');
+    el.naturalWidth = w;
+    el.naturalHeight = hgt;
+    body.append(el);
+    el.dispatchEvent(new FakeEvent('load')); // load 는 버블링하지 않는다 — 본문 상자가 캡처 단계에서 받는다
+    return el;
+  };
+  assert.equal(img(540, 10000).hasAttribute('data-tall'), true, '540×10000 캡처는 내려 읽게');
+  assert.equal(img(600, 1300).hasAttribute('data-tall'), false, '2.2 배 이하는 한 화면에 맞춘다');
+  assert.equal(img(640, 800).hasAttribute('data-tall'), false);
+  const notYet = t.doc.createElement('img');
+  body.append(notYet);
+  notYet.dispatchEvent(new FakeEvent('load'));
+  assert.equal(notYet.hasAttribute('data-tall'), false, '크기를 모르면 건드리지 않는다');
+});
+
+test('frontend(화면 맞춤): 켜면 .fit·aria-pressed, 보이는 화면 높이(px)를 넣고 창 크기가 바뀌면 다시, 보기 크기와 함께 쓴다', async () => {
+  const t = await boot({ hash: '#/b/all' });
+  await openNth(t);
+  const sheet = readerSheet(t);
+  const fit = t.$('#rv-fit');
+  assert.equal(fit.getAttribute('aria-pressed'), 'false');
+  assert.equal(sheet.classList.contains('fit'), false);
+  fit.click();
+  assert.equal(fit.getAttribute('aria-pressed'), 'true');
+  assert.equal(sheet.classList.contains('fit'), true);
+  assert.equal(t.storage.get('hg.readerFit'), 'true');
+  assert.equal(t.storage.has('hg.readerZoom'), false, '바꾼 값만 저장');
+  assert.equal(sheet.style.getPropertyValue('--fit-h'), '768px', '화면 높이 800 에서 위아래 여유 32');
+  t.ctx.innerHeight = 600;
+  t.win.dispatchEvent(new FakeEvent('resize'));
+  assert.equal(sheet.style.getPropertyValue('--fit-h'), '568px', '창 크기·화면 방향이 바뀌면 다시');
+
+  t.$('#rv-out').click();
+  assert.equal(zoomText(t), '90%');
+  assert.equal(sheet.classList.contains('fit'), true, '보기 크기를 바꿔도 화면 맞춤은 그대로');
+  assert.equal(sheet.classList.contains('zoomed'), true);
+  fit.click();
+  assert.equal(fit.getAttribute('aria-pressed'), 'false');
+  assert.equal(sheet.classList.contains('fit'), false);
+  assert.equal(sheet.classList.contains('zoomed'), true, '화면 맞춤을 꺼도 보기 크기는 그대로');
+  assert.equal(t.storage.get('hg.readerFit'), 'false');
+});
+
+test('frontend(보기 크기): 브라우저마다 기억해 다시 열어도 그대로, 이상한 값·막힌 저장소에서는 기본값(100%, 끔)', async () => {
+  const t = await boot({ hash: '#/b/all', stored: { 'hg.readerZoom': '80', 'hg.readerFit': 'true' } });
+  assert.equal(zoomText(t), '80%', '열기 전부터 맞춰 둔다');
+  await openNth(t);
+  assert.equal(readerSheet(t).classList.contains('zoomed'), true);
+  assert.equal(readerSheet(t).style.getPropertyValue('--rz'), '0.8');
+  assert.equal(t.$('#rv-fit').getAttribute('aria-pressed'), 'true');
+  assert.equal(readerSheet(t).classList.contains('fit'), true);
+  // 닫았다가 다른 글을 열어도 유지
+  t.$('#rv-out').click();
+  t.app.closeOverlay(t.$('#reader'));
+  await t.clock.advance(0);
+  await openNth(t, 1);
+  assert.equal(zoomText(t), '70%');
+  assert.equal(readerSheet(t).classList.contains('fit'), true);
+  assert.equal(t.storage.get('hg.readerZoom'), '70');
+  // 새로 켜도 (같은 저장소) 그대로
+  const again = await boot({ stored: Object.fromEntries(t.storage) });
+  assert.equal(zoomText(again), '70%');
+  assert.equal(again.$('#rv-fit').getAttribute('aria-pressed'), 'true');
+
+  for (const stored of [{ 'hg.readerZoom': '75', 'hg.readerFit': '"yes"' }, { 'hg.readerZoom': '"big"', 'hg.readerFit': '1' }, { 'hg.readerZoom': '{oops', 'hg.readerFit': '{' }]) {
+    const b = await boot({ stored });
+    assert.equal(zoomText(b), '100%', JSON.stringify(stored));
+    assert.equal(b.$('#rv-fit').getAttribute('aria-pressed'), 'false', JSON.stringify(stored));
+    assert.equal(readerSheet(b).classList.contains('zoomed'), false);
+    assert.equal(readerSheet(b).classList.contains('fit'), false);
+  }
+
+  const broken = await boot({ hash: '#/b/all', brokenStorage: true });
+  assert.equal(zoomText(broken), '100%');
+  assert.equal(broken.$('#rv-fit').getAttribute('aria-pressed'), 'false');
+  assert.ok(broken.rowIds().length > 0, '저장소가 막혀도 목록은 뜬다');
+  await openNth(broken);
+  broken.$('#rv-in').click();
+  broken.$('#rv-fit').click();
+  assert.equal(zoomText(broken), '115%', '저장하지 못해도 화면은 바뀐다');
+  assert.equal(broken.$('#rv-fit').getAttribute('aria-pressed'), 'true');
+  assert.equal(readerSheet(broken).classList.contains('fit'), true);
+});
+
+test('frontend(보기 크기): 단축키 - + = 0 f ㄹ 는 미리보기가 맨 위에 열려 있을 때만, 입력칸 안·Ctrl/⌘/Alt 조합·Esc 와 겹치지 않게', async () => {
+  const t = await boot({ hash: '#/b/all', server: makeServer({ admin: true }) });
+  const sheet = readerSheet(t);
+  const isFit = () => sheet.classList.contains('fit');
+  // 미리보기가 닫혀 있으면 무시
+  let ev = await t.key('-');
+  assert.equal(zoomText(t), '100%');
+  assert.equal(ev.defaultPrevented, false);
+  await t.key('f');
+  assert.equal(isFit(), false);
+
+  await openNth(t);
+  ev = await t.key('-');
+  assert.equal(zoomText(t), '90%');
+  assert.equal(ev.defaultPrevented, true);
+  const steps = [];
+  for (const k of ['-', '+', '=', '=', '0']) {
+    await t.key(k);
+    steps.push(zoomText(t));
+  }
+  assert.deepEqual(steps, ['80%', '90%', '100%', '115%', '100%']);
+  await t.key('f');
+  assert.equal(isFit(), true);
+  await t.key('ㄹ');
+  assert.equal(isFit(), false, '한글 자판에서 f 자리');
+  await t.key('F');
+  assert.equal(isFit(), true, 'Caps Lock·Shift');
+  await t.key('f', { repeat: true });
+  assert.equal(isFit(), true, '누르고 있는 반복 입력으로 켜졌다 꺼졌다 하지 않는다');
+  ev = await t.key('a');
+  assert.equal(ev.defaultPrevented, false, '다른 키는 그대로');
+
+  // 브라우저 확대(Ctrl/⌘ +, -, 0) 등 조합은 건드리지 않는다
+  for (const mod of ['ctrlKey', 'metaKey', 'altKey']) {
+    for (const k of ['-', '+', '=', '0', 'f']) {
+      ev = await t.key(k, { [mod]: true });
+      assert.equal(ev.defaultPrevented, false, `${mod} + ${k}`);
+    }
+  }
+  assert.equal(zoomText(t), '100%');
+  assert.equal(isFit(), true);
+
+  // 한글 조합 중(IME) 키와 다른 곳에서 이미 처리한(preventDefault) 키도 건드리지 않는다
+  for (const k of ['-', '+', '0', 'f', 'ㄹ']) {
+    ev = await t.key(k, { isComposing: true });
+    assert.equal(ev.defaultPrevented, false, `조합 중 ${k}`);
+  }
+  assert.equal(zoomText(t), '100%');
+  assert.equal(isFit(), true);
+  for (const k of ['-', '+', 'f']) {
+    const pre = new FakeEvent('keydown', { key: k, bubbles: true });
+    pre.preventDefault();
+    t.doc.body.dispatchEvent(pre);
+    await t.clock.advance(0);
+  }
+  assert.equal(zoomText(t), '100%', '이미 처리된 키는 무시');
+  assert.equal(isFit(), true);
+
+  // 입력칸 안: 관리자 메모(textarea), contenteditable
+  t.$('#reader-admin textarea').focus();
+  ev = await t.key('-');
+  await t.key('f');
+  assert.equal(zoomText(t), '100%');
+  assert.equal(isFit(), true);
+  assert.equal(ev.defaultPrevented, false, '메모에 - 가 그대로 입력된다');
+  const editable = t.doc.createElement('div');
+  editable.setAttribute('contenteditable', 'true');
+  t.$('#reader-body').append(editable);
+  editable.focus();
+  await t.key('-');
+  assert.equal(zoomText(t), '100%');
+
+  // 미리보기 위에 다른 창(비밀번호)이 떠 있으면 무시하고, Esc 는 예전처럼 맨 위 창부터 닫는다
+  t.app.promptPassword({ title: '확인', desc: '', endpoint: '/api/admin/login' });
+  await t.clock.advance(50);
+  t.doc.body.focus();
+  await t.key('-');
+  assert.equal(zoomText(t), '100%');
+  await t.key('Escape');
+  assert.equal(t.$('#pw-modal').hidden, true);
+  assert.equal(t.$('#reader').hidden, false);
+  t.$('.reader .close').focus();
+  await t.key('-');
+  assert.equal(zoomText(t), '90%', '비밀번호 창이 닫히면 다시 동작');
+  await t.key('Escape');
+  assert.equal(t.$('#reader').hidden, true, 'Esc 는 미리보기를 닫는다');
+  assert.equal(zoomText(t), '90%', 'Esc 는 크기를 바꾸지 않는다');
+  await t.key('-');
+  assert.equal(zoomText(t), '90%', '닫힌 뒤에는 다시 무시');
+});
+
+// 미리보기의 가짜 배치 (가짜 DOM 에는 배치가 없으니 손으로): 화면(오버레이) 높이 800,
+// 머리 186 → 본문 [앞 글 300 → 여백 24 → 1080×6000 긴 캡처(720 폭이면 4000) → 여백 24 → 뒤 글 1500] → 꼬리 170.
+// 본문은 보기 크기(--rz)만큼 함께 줄고, 화면 맞춤이면 캡처만 보이는 화면 높이(--fit-h)로 줄어든다. 요소의 화면 위치는 scrollTop 을 따라 움직인다
+function fakeReaderLayout(t) {
+  const ov = t.$('#reader');
+  const sheet = readerSheet(t);
+  t.$('#reader-body').innerHTML = '<p id="lead">앞 글</p><img id="cap" src="cap.png"><p id="tail">뒤 글 <b>굵게</b></p>';
+  const H = 800;
+  const boxes = () => {
+    const z = Number(sheet.style.getPropertyValue('--rz') || 1);
+    const cap = sheet.classList.contains('fit') ? Math.min(parseFloat(sheet.style.getPropertyValue('--fit-h')), 4000 * z) : 4000 * z;
+    const b = {};
+    let y = 0;
+    const put = (name, h, gap = 0) => {
+      y += gap;
+      b[name] = [y, h];
+      y += h;
+    };
+    put('head', 186);
+    put('lead', 300 * z);
+    put('cap', cap, 24 * z);
+    put('tail', 1500 * z, 24 * z);
+    b.body = [b.lead[0], y - b.lead[0]];
+    put('foot', 170);
+    b.total = y;
+    return b;
+  };
+  let scrollTop = 0;
+  Object.defineProperties(ov, {
+    scrollTop: { get: () => scrollTop, set: (v) => (scrollTop = v), configurable: true },
+    scrollHeight: { get: () => boxes().total, configurable: true },
+    clientHeight: { value: H, configurable: true },
+    _rect: { value: { top: 0, bottom: H, left: 0, right: 760, width: 760, height: H }, configurable: true },
+  });
+  const rectOf = (name) => () => {
+    const [top, h] = boxes()[name];
+    return { top: top - scrollTop, bottom: top - scrollTop + h, left: 0, right: 760, width: 760, height: h };
+  };
+  const named = { '.reader-head': 'head', '#reader-body': 'body', '#lead': 'lead', '#cap': 'cap', '#tail': 'tail', '#reader-foot': 'foot' };
+  for (const [sel, name] of Object.entries(named)) Object.defineProperty(t.$(sel), '_rect', { get: rectOf(name), configurable: true });
+  const none = { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 };
+  for (const sel of ['#reader-admin', '#reader-comments']) Object.defineProperty(t.$(sel), '_rect', { value: none, configurable: true }); // 숨은 요소
+  // '<b>' 는 뒤 글 맨 끝 줄에 있다 (가운데에 걸치지 않은 안쪽 요소, 줄 높이도 보기 크기를 따른다)
+  const bold = () => {
+    const r = rectOf('tail')();
+    const h = 26 * Number(sheet.style.getPropertyValue('--rz') || 1);
+    return { ...r, top: r.bottom - h, height: h };
+  };
+  Object.defineProperty(t.$('#tail b'), '_rect', { get: bold, configurable: true });
+  const at = (name, frac) => boxes()[name][0] + frac * boxes()[name][1]; // 내용 안의 위치
+  return {
+    get scrollTop() { return scrollTop; },
+    set scrollTop(v) { scrollTop = v; },
+    middle: () => scrollTop + H / 2, // 지금 화면 가운데에 있는 내용 위치
+    centre: (name, frac) => (scrollTop = at(name, frac) - H / 2), // 그 위치를 화면 가운데로
+    at,
+  };
+}
+const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 0.5, `${msg}: ${a} ≠ ${b}`);
+
+test('frontend(보기 크기): 크기·화면 맞춤을 바꿔도 화면 가운데에 있던 내용이 그대로 가운데 (전체 비율이 아니라 가운데 요소 기준)', async () => {
+  const t = await boot({ hash: '#/b/all' });
+  await openNth(t);
+  const L = fakeReaderLayout(t);
+
+  // 맨 위에서 바꾸면 맨 위 그대로 (크게 해도 머리부터)
+  await t.key('f');
+  assert.equal(L.scrollTop, 0);
+  await t.key('f');
+  await t.key('+');
+  await t.key('+');
+  assert.equal(L.scrollTop, 0);
+  await t.key('0');
+  assert.equal(L.scrollTop, 0);
+
+  // 긴 캡처 바로 아래 글을 읽다가 화면 맞춤 켜기 → 캡처만 768 로 줄어도 같은 글이 가운데 (옛 전체 비율 방식은 화면 하나 가까이 아래로 튀었다)
+  L.centre('tail', 0.2);
+  const before = L.scrollTop;
+  await t.key('f');
+  assert.equal(readerSheet(t).classList.contains('fit'), true);
+  near(L.middle(), L.at('tail', 0.2), '맞춤 켜기');
+  assert.ok(before - L.scrollTop > 3000, '줄어든 캡처 높이만큼 위로');
+  // 같은 자리에서 끄기 → 원래 자리 (옛 방식은 캡처 한가운데로 갔다)
+  await t.key('f');
+  near(L.middle(), L.at('tail', 0.2), '맞춤 끄기');
+  near(L.scrollTop, before, '켰다 끄면 처음 자리');
+
+  // 보기 크기: 글이 함께 줄어도 같은 글의 같은 지점
+  await t.key('-');
+  assert.equal(zoomText(t), '90%');
+  near(L.middle(), L.at('tail', 0.2), '작게');
+  t.$('#rv-in').click();
+  t.$('#rv-in').click();
+  assert.equal(zoomText(t), '115%');
+  near(L.middle(), L.at('tail', 0.2), '크게');
+  t.$('#rv-reset').click();
+
+  // 캡처 중간을 보다가 맞춤 → 캡처의 같은 높이 비율이 가운데
+  L.centre('cap', 0.25);
+  t.$('#rv-fit').click();
+  near(L.middle(), L.at('cap', 0.25), '그림 안에서 맞춤 켜기');
+  t.$('#rv-fit').click();
+  near(L.middle(), L.at('cap', 0.25), '그림 안에서 맞춤 끄기');
+
+  // 요소 사이 여백에 걸쳐 있으면 바로 위·아래 요소 끝 사이의 같은 지점
+  L.centre('lead', 1);
+  L.scrollTop += 9;
+  t.$('#rv-fit').click();
+  near(L.middle(), L.at('lead', 1) + 9, '여백에서 맞춤 켜기');
+  t.$('#rv-fit').click();
+  // 캡처 바로 아래 여백: 위 경계는 캡처의 아래 끝 (감싼 본문의 위 끝이면 줄어든 캡처만큼 어긋난다)
+  L.centre('cap', 1);
+  L.scrollTop += 9;
+  t.$('#rv-fit').click();
+  near(L.middle(), L.at('cap', 1) + 9, '캡처 아래 여백에서 맞춤 켜기');
+  t.$('#rv-fit').click();
+  near(L.middle(), L.at('cap', 1) + 9, '캡처 아래 여백에서 맞춤 끄기');
+
+  // 뒤 글 안쪽 요소(<b>, 끝 줄)가 가운데에 걸치지 않으면 뒤 글 위 끝 ~ <b> 위 끝 사이 비율 (글이 줄어도 같은 지점)
+  L.centre('tail', 0.5);
+  await t.key('-');
+  near(L.middle(), L.at('tail', 0.5), '글자 줄 사이에서 작게');
+  t.$('#rv-fit').click();
+  near(L.middle(), L.at('tail', 0.5), '글자 줄 사이에서 맞춤 켜기');
+  t.$('#rv-fit').click();
+  await t.key('0');
+
+  // 닫힌 미리보기는 건드리지 않는다
+  t.app.closeOverlay(t.$('#reader'));
+  await t.clock.advance(0);
+  L.scrollTop = 1234;
+  t.$('#rv-in').click();
+  assert.equal(L.scrollTop, 1234);
+});
+
+
+test('frontend(보기 크기): CSS — zoom 은 지원할 때만 본문·댓글에, 그림·영상·iframe 은 상자 안 가운데, 화면 맞춤은 화면 높이, 미리보기 안에만·색은 변수만', () => {
+  const flat = CSS_SRC.replace(/\s+/g, ' ');
+  const start = flat.indexOf('/* ---------- 미리보기 보기 크기');
+  assert.ok(start > 0, '보기 크기 구역');
+  const block = flat.slice(start, flat.indexOf('.toast {', start));
+  assert.match(block, /\.reader \{ --rz: 1; --rzc: 1; \}/);
+  assert.match(block, /@supports \(zoom: 1\) \{ \/\*[^*]*\*\/ \.reader\.zoomed \{ --rzc: var\(--rz\); \} \.reader\.zoomed \.reader-body, \.reader\.zoomed \.cm-body \{ zoom: var\(--rz\); \}/, '본문과 댓글 목록에 zoom');
+  assert.match(block, /@supports not \(zoom: 1\) \{ \/\*[^*]*\*\/ \.reader\.zoomed \.reader-body \{ font-size: calc\(16px \* var\(--rz\)\); \}/, 'zoom 을 모르면 글자 크기로');
+  assert.match(block, /\.reader\.zoomed \.reader-body img, \.reader\.zoomed \.reader-body video, \.reader\.zoomed \.reader-body iframe \{ max-width: min\(100%, calc\(100% \* var\(--rz\)\)\); margin-left: auto; margin-right: auto; \}/);
+  assert.match(block, /\.reader\.fit \.reader-body img:not\(\[data-tall\]\), \.reader\.fit \.reader-body video \{ width: auto; height: auto; max-height: calc\(var\(--fit-h, 90vh\) \/ var\(--rzc\)\); margin-left: auto; margin-right: auto; \}/);
+  assert.match(block, /\.reader\.fit \.reader-body iframe \{[^}]*max-width: min\(100%, calc\(100% \* var\(--rz\)\), calc\(var\(--fit-h, 90vh\) \/ var\(--rzc\) \* 16 \/ 9\)\);/);
+  // 표는 넘치면 안에서 가로 스크롤 (예전 규칙 유지), pre 도
+  assert.match(flat, /\.reader-body table \{ max-width: 100%; display: block; overflow-x: auto; \}/);
+  assert.match(flat, /\.reader-body pre \{ max-width: 100%; overflow-x: auto; \}/);
+  // 손가락으로 누르기 쉬운 높이, 켜진 화면 맞춤은 강조색
+  const btn = /\.reader-view button \{([^}]*)\}/.exec(block)[1];
+  assert.ok(Number(/(?:^|[ ;])height: (\d+)px/.exec(btn)[1]) >= 32, '버튼 높이 32px 이상');
+  assert.match(block, /\.reader-view \.rv-fit\[aria-pressed='true'\] \{[^}]*var\(--accent\)/);
+  assert.match(block, /\.reader-tools \{[^}]*flex-wrap: wrap;/, '좁은 화면에서는 줄바꿈');
+  // 상태 표시 글자는 본문 색 (밝은 화면의 --accent 글자는 대비 약 3:1), 상태는 바탕·테두리로
+  for (const sel of [/\.reader\.zoomed \.reader-view \.rv-num/, /\.reader-view \.rv-fit\[aria-pressed='true'\]/]) {
+    const rule = new RegExp(`${sel.source} \\{([^}]*)\\}`).exec(block)[1];
+    assert.match(rule, /(?:^|[ ;])color: var\(--text\);/, sel.source);
+    assert.match(rule, /background: var\(--accent-soft\);/, sel.source);
+    assert.match(rule, /box-shadow: inset 0 0 0 1px var\(--accent\);/, sel.source);
+  }
+  // 끝의 −/+ 는 disabled 가 아니라 aria-disabled 로 흐리게 (포커스가 남는다)
+  assert.match(block, /\.reader-view button\[aria-disabled='true'\] \{ opacity: 0\.35;/);
+  assert.match(block, /\.reader-view button:hover:not\(\[aria-disabled='true'\]\)/);
+  assert.doesNotMatch(block, /:disabled/);
+  // 휴대폰: 보기 줄은 화면 아래 가운데에 고정, 꼬리는 그만큼 띄운다
+  const phone = /@media \(max-width: 640px\) \{ \/\*[^*]*\*\/ \.reader-view \{([^}]*)\}([^}]*\})/.exec(block);
+  assert.ok(phone, '휴대폰 보기 줄 구역');
+  assert.match(phone[1], /position: fixed;/);
+  assert.match(phone[1], /bottom: calc\(12px \+ env\(safe-area-inset-bottom, 0px\)\);/);
+  assert.match(phone[1], /width: max-content;/, '왼쪽 50% 로 폭이 반으로 줄어 두 줄이 되지 않게');
+  assert.match(phone[1], /background: var\(--surface-2\);/);
+  assert.match(phone[2], /\.reader-foot \{ padding-bottom: calc\(72px \+ env\(safe-area-inset-bottom, 0px\)\); \}/);
+  // 색은 :root 변수만 (밝은·어두운 화면 둘 다 따라간다)
+  assert.doesNotMatch(block, /#[0-9a-f]{3,8}\b|rgba?\(/i);
+  // 모든 규칙이 미리보기 안에만 걸린다 (목록·다른 창에는 영향 없음)
+  const selectors = [...block.replace(/\/\*.*?\*\//g, '').matchAll(/([^{}]+)\{/g)]
+    .map((m) => m[1].trim())
+    .filter((s) => !s.startsWith('@'))
+    .flatMap((s) => s.split(',').map((x) => x.trim()));
+  assert.ok(selectors.length > 10);
+  for (const s of selectors) assert.match(s, /^\.reader([-.\s]|$)/, s);
+  // 휴대폰: 머리 오른쪽 60px 는 그대로 닫기 ✕ 자리
+  const mobile = flat.slice(flat.indexOf('@media (max-width: 640px)'));
+  assert.match(mobile, /\.reader-head \{ padding: 14px 60px 10px 16px; \}/);
+  assert.match(flat, /\.reader-head \{ padding: 18px 68px 12px 20px;/);
 });
