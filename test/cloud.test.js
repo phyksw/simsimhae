@@ -437,7 +437,7 @@ test('미리보기: 원문에서 가져와 정리하고 DO 저장소에 캐시 (
   assert.equal((await call(d, '/api/posts/nope%3A1/read')).status, 404);
 });
 
-test('알람 때 소소한 이야기 → 웃긴 것만 글의 미리보기를 몇 개만 미리 준비하고, 못 가져온 글은 바로 다시 시도하지 않는다', async () => {
+test('알람 때 소소한 이야기 → 소소한 웃음 글의 미리보기를 몇 개만 미리 준비하고, 못 가져온 글은 바로 다시 시도하지 않는다', async () => {
   globalThis.__cl.items = { humoruniv: [item('14', '못 읽는 썰'), item('11', '첫 번째 썰'), item('12', '두 번째 썰')] };
   globalThis.__cl.articles = Object.fromEntries(['11', '12'].map((n) => [`https://example.invalid/${n}`, { html: `<p>본문 ${n}</p>` }]));
   const storage = fakeStorage();

@@ -1,4 +1,4 @@
-// 소소한 이야기·웃긴 것만: 기간 제한 없이 조건에 맞는 최근 BOARD_KEEP 개를 남기고, 그 글들은 보관 기간이 지나도 지우지 않는다.
+// 소소한 이야기·소소한 웃음: 기간 제한 없이 조건에 맞는 최근 BOARD_KEEP 개를 남기고, 그 글들은 보관 기간이 지나도 지우지 않는다.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';

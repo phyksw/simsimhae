@@ -309,7 +309,7 @@ export async function relinkAll() {
 
 function prune() {
   const cutoff = Date.now() - config.retentionDays * 864e5;
-  // 소소한 이야기·웃긴 것만 게시판에 남아 있는 글(각 최근 BOARD_KEEP 개)은 오래돼도 지우지 않는다
+  // 소소한 이야기·소소한 웃음 게시판에 남아 있는 글(각 최근 BOARD_KEEP 개)은 오래돼도 지우지 않는다
   const kept = keptBoardIds();
   let removed = 0;
   for (const p of store.allPosts()) {

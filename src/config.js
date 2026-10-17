@@ -96,7 +96,7 @@ export function configure(env = {}, { mode = 'local' } = {}) {
     cloud: {
       // 미리보기(원문에서 가져와 정리한 본문)를 DO 저장소에 두는 시간
       readCacheHours: Math.max(1, num(e('READ_CACHE_HOURS'), 12)),
-      // 알람(수집) 한 번에 미리 준비하는 미리보기 수 (소소한 이야기 → 웃긴 것만 순, 0 이면 안 함)
+      // 알람(수집) 한 번에 미리 준비하는 미리보기 수 (소소한 이야기 → 소소한 웃음 순, 0 이면 안 함)
       prefetchPerRun: Math.max(0, Math.min(100, Math.floor(num(e('PREFETCH_PER_RUN'), 12)))),
       // 알람 한 번의 출처 사이트 요청 상한 (Workers 의 하위 요청 한도 1000 아래로)
       requestBudget: Math.max(50, Math.min(950, Math.floor(num(e('CRAWL_REQUEST_BUDGET'), 800)))),

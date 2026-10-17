@@ -4,12 +4,12 @@ import { isPending, isPublic, groupKey, onePerGroup } from './store.js';
 import { vibeGuess } from './filter.js';
 
 /**
- * 소소한 이야기(story)·웃긴 것만(pick) 게시판에 남겨 두는 글 수: 기간 제한 없이, 조건에 맞는 글 중 가장 최근에 들어온 N개.
+ * 소소한 이야기(story)·소소한 웃음(pick) 게시판에 남겨 두는 글 수: 기간 제한 없이, 조건에 맞는 글 중 가장 최근에 들어온 N개.
  * 이 안에 든 글은 보관 기간(RETENTION_DAYS)이 지나도 지우지 않는다 (crawler.js prune).
  */
 export const BOARD_KEEP = Math.max(10, Number(process.env.BOARD_KEEP) || 100);
 
-/** 웃긴 것만(pick): 공개 글 중 "그냥 웃긴" 글. Claude 판정이 있으면 그걸, 없으면 키워드 점수를 본다. */
+/** 소소한 웃음(pick): 공개 글 중 "그냥 웃긴" 글. Claude 판정이 있으면 그걸, 없으면 키워드 점수를 본다. */
 export const PICK_MIN = 65;
 export function pickWorthy(p) {
   if (p.manual === 'ok' && p.shorts) return true;
@@ -17,13 +17,13 @@ export function pickWorthy(p) {
   return (p.shortsScore ?? 0) >= PICK_MIN - 5;
 }
 
-/** 글의 "썰·대화" 분위기 점수: 관리자 지정 > Claude 판정(ai.vibe) > 제목 어림값 */
+/** 글의 "소소한 이야기" 분위기 점수: 관리자 지정 > Claude 판정(ai.vibe) > 제목 어림값 */
 export function vibeOf(p) {
   if (p.manualVibe === true) return 100;
   if (p.manualVibe === false) return 0;
   return typeof p.ai?.vibe === 'number' ? p.ai.vibe : vibeGuess(p);
 }
-/** 썰·대화(story): 읽어주며 반응하기 좋은 웃긴 글 */
+/** 소소한 이야기(story): 읽어주며 반응하기 좋은 웃긴 글 */
 export const STORY_VIBE_MIN = 70;
 const STORY_FUNNY_MIN = 55;
 export function storyWorthy(p) {
@@ -67,7 +67,7 @@ function newestKept(posts) {
     .slice(0, BOARD_KEEP);
 }
 
-/** 소소한 이야기·웃긴 것만 게시판에 남아 있는 글 id (보관 기간이 지나도 지우지 않을 글) */
+/** 소소한 이야기·소소한 웃음 게시판에 남아 있는 글 id (보관 기간이 지나도 지우지 않을 글) */
 export function keptBoardIds(all = store.allPosts()) {
   return new Set([...boardPosts('story', {}, all), ...boardPosts('pick', {}, all)].map((p) => p.id));
 }

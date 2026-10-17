@@ -220,7 +220,7 @@ async function loadMeta() {
 
 function boardName(board) {
   if (board === 'story') return '☕ 소소한 이야기';
-  if (board === 'pick') return '😆 웃긴 것만';
+  if (board === 'pick') return '😄 소소한 웃음';
   if (board === 'all') return '전체';
   if (board === 'adult') return '🔒 므흣';
   if (board === 'shorts') return '🎬 쇼츠 후보함';
@@ -246,7 +246,7 @@ function renderBoards() {
     );
   nav.replaceChildren(...kids(
     chip('story', '☕ 소소한 이야기', { count: bc.story }),
-    chip('pick', '😆 웃긴 것만', { count: bc.pick ?? m.pickCount }),
+    chip('pick', '😄 소소한 웃음', { count: bc.pick ?? m.pickCount }),
     chip('all', '전체', { count: total }),
     ...m.sources.map((s) => chip(s.id, s.short, { swatch: s.color, count: s.count, title: s.name + (s.active ? '' : ' (수집 꺼짐)'), cls: s.active ? '' : 'inactive' })),
     chip('adult', m.adult ? '🔓 므흣' : '🔒 므흣', { cls: 'special', title: '비밀번호로 잠긴 게시판', count: m.adult ? bc.adult : null }),
@@ -320,7 +320,7 @@ function renderAdminBar() {
     h('a', { class: `stat${state.board === board ? ' on' : ''}`, href: `#/b/${board}`, title }, label, h('b', {}, value ?? 0));
   $('#admin-stats').replaceChildren(
     statLink('☕ 소소한 이야기', m.boardCounts?.story, 'story', '소소한 이야기 보기'),
-    statLink('😆 웃긴 것만', m.pickCount, 'pick', '웃긴 것만 보기'),
+    statLink('😄 소소한 웃음', m.pickCount, 'pick', '소소한 웃음 보기'),
     statLink('공개', st.public, 'all', '공개된 전체 글 보기'),
     statLink('므흣', st.adult, 'adult', '므흣 잠금 게시판 보기'),
     statLink('걸러짐', st.blocked, 'filtered', '걸러진 글 보기 — 여기서 [게시하기]로 공개할 수 있어요'),

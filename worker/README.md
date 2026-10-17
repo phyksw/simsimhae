@@ -91,7 +91,7 @@ npm run cloud:push -- https://simsimhae.board.workers.dev
 | 이름 | 기본 | 뜻 |
 |---|---|---|
 | `READ_CACHE_HOURS` | 12 | 미리보기를 DO 저장소에 두는 시간 |
-| `PREFETCH_PER_RUN` | 12 | 수집 한 번에 미리 준비하는 미리보기 수 (소소한 이야기 → 웃긴 것만, 0 이면 안 함) |
+| `PREFETCH_PER_RUN` | 12 | 수집 한 번에 미리 준비하는 미리보기 수 (소소한 이야기 → 소소한 웃음, 0 이면 안 함) |
 | `CRAWL_REQUEST_BUDGET` | 800 | 알람 한 번의 출처 사이트 요청 상한 (미리 준비는 여기서 멈춤) |
 
 ## 한도·동작 메모
