@@ -9,7 +9,7 @@ import { CRITERIA_VERSION } from './criteria.js';
  * 핸드드립(story)·푸어오버(pick) 게시판에 남겨 두는 글 수: 기간 제한 없이, 조건에 맞는 글 중 가장 최근에 들어온 N개.
  * 이 안에 든 글은 보관 기간(RETENTION_DAYS)이 지나도 지우지 않는다 (crawler.js prune).
  */
-export const BOARD_KEEP = Math.max(10, Number(process.env.BOARD_KEEP) || 100);
+export const BOARD_KEEP = Math.max(10, Number(process.env.BOARD_KEEP) || 300);
 
 /** 푸어오버(pick): 공개 글 중 "그냥 웃긴" 글. Claude 판정이 있으면 그걸, 없으면 섞은 점수를 본다. */
 export const PICK_MIN = 65;
