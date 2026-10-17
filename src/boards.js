@@ -6,12 +6,12 @@ import { ruleCaps } from './model/score.js';
 import { CRITERIA_VERSION } from './criteria.js';
 
 /**
- * 소소한 이야기(story)·소소한 웃음(pick) 게시판에 남겨 두는 글 수: 기간 제한 없이, 조건에 맞는 글 중 가장 최근에 들어온 N개.
+ * 핸드드립(story)·푸어오버(pick) 게시판에 남겨 두는 글 수: 기간 제한 없이, 조건에 맞는 글 중 가장 최근에 들어온 N개.
  * 이 안에 든 글은 보관 기간(RETENTION_DAYS)이 지나도 지우지 않는다 (crawler.js prune).
  */
 export const BOARD_KEEP = Math.max(10, Number(process.env.BOARD_KEEP) || 100);
 
-/** 소소한 웃음(pick): 공개 글 중 "그냥 웃긴" 글. Claude 판정이 있으면 그걸, 없으면 섞은 점수를 본다. */
+/** 푸어오버(pick): 공개 글 중 "그냥 웃긴" 글. Claude 판정이 있으면 그걸, 없으면 섞은 점수를 본다. */
 export const PICK_MIN = 65;
 /**
  * Claude 판정이 없는 글의 대체 기준: 섞은 쇼츠 점수(filter.js shortsScore = 키워드 + 학습 점수, 수집 때마다 p.shortsScore 로 다시 매긴다).
@@ -28,19 +28,19 @@ export function pickWorthy(p) {
   return (p.shortsScore ?? 0) >= PICK_FALLBACK_MIN && ruleCaps(p).funny >= PICK_FALLBACK_MIN;
 }
 
-/** 글의 "소소한 이야기" 분위기 점수: 관리자 지정 > Claude 판정(ai.vibe) > 제목 어림값 */
+/** 글의 "핸드드립" 분위기 점수: 관리자 지정 > Claude 판정(ai.vibe) > 제목 어림값 */
 export function vibeOf(p) {
   if (p.manualVibe === true) return 100;
   if (p.manualVibe === false) return 0;
   return typeof p.ai?.vibe === 'number' ? p.ai.vibe : vibeGuess(p);
 }
-/** 소소한 이야기(story): 읽어주며 반응하기 좋은 웃긴 글 */
+/** 핸드드립(story): 읽어주며 반응하기 좋은 웃긴 글 */
 export const STORY_VIBE_MIN = 70;
 const STORY_FUNNY_MIN = 55;
 export function storyWorthy(p) {
   if (p.manualVibe === true) return true;
   if (p.manualVibe === false) return false;
-  // 운영자 요청: 소소한 이야기는 Claude 판정(웃김 + 분위기 점수)이 끝난 글만. 키워드 어림값만 있는 글은 넣지 않는다.
+  // 운영자 요청: 핸드드립은 Claude 판정(웃김 + 분위기 점수)이 끝난 글만. 키워드 어림값만 있는 글은 넣지 않는다.
   return !!p.ai && p.ai.verdict === 'ok' && typeof p.ai.vibe === 'number' && p.ai.shortsScore >= STORY_FUNNY_MIN && p.ai.vibe >= STORY_VIBE_MIN;
 }
 
@@ -78,7 +78,7 @@ function newestKept(posts) {
     .slice(0, BOARD_KEEP);
 }
 
-/** 소소한 이야기·소소한 웃음 게시판에 남아 있는 글 id (보관 기간이 지나도 지우지 않을 글) */
+/** 핸드드립·푸어오버 게시판에 남아 있는 글 id (보관 기간이 지나도 지우지 않을 글) */
 export function keptBoardIds(all = store.allPosts()) {
   return new Set([...boardPosts('story', {}, all), ...boardPosts('pick', {}, all)].map((p) => p.id));
 }

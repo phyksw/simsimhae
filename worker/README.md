@@ -52,7 +52,7 @@ http://127.0.0.1:8791 이 클라우드와 같은 화면입니다. cron 은 `--te
 ```bash
 npx wrangler login
 npx wrangler secret put ADMIN_PASSWORD      # 관리자 로그인 (길고 무작위로 — 관리자 화면이 인터넷에 열린다)
-npx wrangler secret put ADULT_PASSWORD      # 므흣 게시판 비밀번호
+npx wrangler secret put ADULT_PASSWORD      # 그라운즈(잠금 게시판) 비밀번호
 npx wrangler secret put SESSION_SECRET      # 쿠키 서명용 (길고 무작위로)
 npx wrangler secret put ANTHROPIC_API_KEY   # (선택) 넣으면 Claude 검수가 켜진다
 npm run worker:deploy
@@ -91,7 +91,7 @@ npm run cloud:push -- https://simsimhae.board.workers.dev
 | 이름 | 기본 | 뜻 |
 |---|---|---|
 | `READ_CACHE_HOURS` | 12 | 미리보기를 DO 저장소에 두는 시간 |
-| `PREFETCH_PER_RUN` | 12 | 수집 한 번에 미리 준비하는 미리보기 수 (소소한 이야기 → 소소한 웃음, 0 이면 안 함) |
+| `PREFETCH_PER_RUN` | 12 | 수집 한 번에 미리 준비하는 미리보기 수 (핸드드립 → 푸어오버, 0 이면 안 함) |
 | `CRAWL_REQUEST_BUDGET` | 800 | 알람 한 번의 출처 사이트 요청 상한 (미리 준비는 여기서 멈춤) |
 
 ## 한도·동작 메모

@@ -444,7 +444,7 @@ test('알람의 미리 준비(prefetch): PC 가 받는 출처의 글과 PC 미�
   await call(d, '/api/admin/ingest', { cookie, body: { source: 'dogdrip', reads: [{ postId: '960', html: '<p>할머니 말씀</p>' }] } });
   await call(d, '/api/admin/crawl', { body: {}, cookie });
   await quiet(() => d.alarm());
-  // 셋 다 소소한 이야기·소소한 웃음에 들게
+  // 셋 다 핸드드립·푸어오버에 들게
   const items = ['dogdrip:960', 'dogdrip:961', 'humoruniv:962'].map((id) => ({ id, verdict: 'ok', shortsScore: 80, vibe: 90, reason: '사투리' }));
   await call(d, '/api/admin/verdicts', { cookie, body: { model: 't', items } });
   const story = await call(d, '/api/posts?board=story&size=100');
@@ -699,9 +699,9 @@ test('scripts/pc-routine.js: collect → queue → apply → status 왕복 (요�
   assert.ok(alogs.some((s) => s.startsWith('판정 파일에 없는 글 22개')), alogs.join('\n'));
   assert.ok(alogs.some((s) => s.startsWith(`  뺌: ${top[2]} — verdict 값 오류`)));
   assert.ok(alogs.includes('  뺌: dogdrip:none — batch 에 없는 글'), alogs.join('\n'));
-  // 보고용: 소소한 이야기 조건(ok + 웃김 55↑ + 분위기 70↑)에 드는 글 (src/boards.js 기준 점수)
+  // 보고용: 핸드드립 조건(ok + 웃김 55↑ + 분위기 70↑)에 드는 글 (src/boards.js 기준 점수)
   assert.deepEqual(ar.story, [top[0]]);
-  assert.ok(alogs.includes(`소소한 이야기 조건(ok + shortsScore 55 이상 + vibe 70 이상)에 드는 글 1개: ${batch.items[0].title}`), alogs.join('\n'));
+  assert.ok(alogs.includes(`핸드드립 조건(ok + shortsScore 55 이상 + vibe 70 이상)에 드는 글 1개: ${batch.items[0].title}`), alogs.join('\n'));
   assert.ok(!alogs.join('\n').includes(ENV.ADMIN_PASSWORD));
   const state = JSON.parse(readFileSync(path.join(dir, 'state.json'), 'utf8'));
   assert.equal(state.applied, 2);
@@ -711,7 +711,7 @@ test('scripts/pc-routine.js: collect → queue → apply → status 왕복 (요�
   assert.ok(state.appliedFiles['verdicts-20261017-153012.json'], '올린 판정 파일을 기억한다');
   assert.deepEqual(routine.unappliedVerdicts(dir), []);
   const story = await call(d, '/api/posts?board=story&size=100');
-  assert.deepEqual(story.json.items.map((p) => p.id), [top[0]], '정상 + 웃김 55↑ + 분위기 70↑ 은 소소한 이야기로');
+  assert.deepEqual(story.json.items.map((p) => p.id), [top[0]], '정상 + 웃김 55↑ + 분위기 70↑ 은 핸드드립으로');
 
   // status
   const st = await routine.status({ origin: ORIGIN, password: ENV.ADMIN_PASSWORD, dir, fetch: f });
@@ -1191,7 +1191,7 @@ test('다시 보기(revisit): 새 기준 표시 없는 옛 판정 중 not_humor�
   setAi(307, old('not_humor')); // 차단 (키워드)
   setAi(308, { ...old('not_humor'), criteria: crawler.CRITERIA_VERSION }); // 이미 새 기준
   setAi(309, old('politics')); // 다른 종류
-  setAi(310, old('not_humor'), { manualVibe: false }); // 관리자가 소소한 이야기에서 뺌
+  setAi(310, old('not_humor'), { manualVibe: false }); // 관리자가 핸드드립에서 뺌
   setAi(311, old('not_humor'), { dupOf: 'humoruniv:301' }); // 대표 글이 있는 사본
   setAi(312, old('ok', 50)); // 대상 (분위기 점수 없는 옛 판정)
   // 시험 전제
@@ -1271,7 +1271,7 @@ test('다시 보기(revisit): 새 기준 표시 없는 옛 판정 중 not_humor�
     assert.equal(store.getPost('humoruniv:313').ai.criteria, crawler.CRITERIA_VERSION);
     assert.equal(store.getPost('humoruniv:312').ai.criteria, crawler.CRITERIA_VERSION);
     const story = await call(d, '/api/posts?board=story&size=100');
-    assert.ok(story.json.items.some((p) => p.id === 'humoruniv:301'), '새 기준이면 소소한 이야기로');
+    assert.ok(story.json.items.some((p) => p.id === 'humoruniv:301'), '새 기준이면 핸드드립으로');
     // 다시 판정한 글은 다시 보기에 다시 나오지 않는다 (302 만 남는다)
     const after = await call(d, '/api/admin/review-queue?revisit=1', { cookie });
     assert.deepEqual(after.json.items.map((x) => x.id), ['humoruniv:302']);

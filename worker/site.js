@@ -1,7 +1,7 @@
 // SiteDO: 사이트 전체 상태를 가진 Durable Object 하나('main'). 로컬의 src/server.js 한 프로세스와 같은 역할이다.
 //   - 상태: 메모리(src/store.js) + DO SQLite(worker/storage.js)에 영속. 요청·알람이 끝날 때마다 바뀐 것만 저장한다.
 //   - 알람: 실시간 ON 이면 간격마다 수집(src/crawler.js crawlAll — 수집 → 키워드 판정 → [API 키 있으면 Claude] → 점수·묶음),
-//           끝나면 소소한 이야기·웃긴 것만 글의 미리보기를 몇 개 미리 준비한다. '지금 수집'도 알람으로 돈다(Workers 한도 안에서).
+//           끝나면 핸드드립·웃긴 것만 글의 미리보기를 몇 개 미리 준비한다. '지금 수집'도 알람으로 돈다(Workers 한도 안에서).
 //   - API: src/api.js (로컬과 같은 경로·응답 모양). /api/events·/api/sync/*·/api/admin/publish 는 없다(404).
 // 설계: worker/CLOUD.md
 import { DurableObject } from 'cloudflare:workers';
@@ -196,7 +196,7 @@ export class SiteDO extends DurableObject {
   }
 
   /**
-   * 소소한 이야기 → 웃긴 것만 글 중 미리보기가 없는 것을 몇 개 미리 가져온다 (방문자가 열 때 기다리지 않게).
+   * 핸드드립 → 웃긴 것만 글 중 미리보기가 없는 것을 몇 개 미리 가져온다 (방문자가 열 때 기다리지 않게).
    * - 수집을 끈 출처, 이번 수집에서 목록을 못 받은 출처, PC 가 받아 넣는 출처(crawler.pcFed)의 글과 PC 미리보기가 붙은 글은 가져오지 않는다.
    * - 못 가져온 글은 점점 늦게 몇 번만 다시 시도한다. 실패 기록은 실패할 때마다 바로 저장한다 (알람이 도중에 끊겨도 남게).
    * - 한 번에 시도하는 수는 성공 목표의 두 배까지, 시간은 알람 시작부터 budgetMs 까지.

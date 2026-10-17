@@ -6,7 +6,7 @@
 //                클라우드 판정 사본으로 다시 학습할 때 그 파일을 넘기면 된다.
 //   --reference  쇼츠 양성 예시 (기본 src/model/reference-shorts.json),  --negatives 쇼츠 음성 예시 (기본 src/model/reference-negatives.json)
 //   --out        가중치 파일 (기본 src/model/weights.json)
-//   --report     교차검증 표 전체 (섞는 비율별 표, 소소한 웃음 기준점별 정밀도·재현율)
+//   --report     교차검증 표 전체 (섞는 비율별 표, 푸어오버 기준점별 정밀도·재현율)
 //   --grid       설정 비교표 (규칙 무게·쇼츠 무게·L2) — DEFAULT_CONFIG 를 고른 근거. 1~2분 걸린다
 //   --stamp      trainedAt 에 넣을 시각. 없으면 입력 글의 가장 늦은 Claude 판정 시각 → 같은 입력이면 같은 파일 (git diff 가 매번 나지 않게)
 //   --dry-run    파일을 쓰지 않고 보고만
@@ -92,7 +92,7 @@ function trainTarget(src, t, cfg, med, k) {
   const bestJ = Math.max(...pool.map((b) => b.J ?? -Infinity));
   const chosen = [...pool].reverse().find((b) => (b.J ?? -Infinity) >= bestJ - J_TIE) || pool[0];
 
-  // 소소한 웃음(pick) 판정 없는 글 대체 기준을 고르는 데 쓰는 표: 섞은 점수 기준점별 정밀도·재현율 (사이트 겹 밖)
+  // 푸어오버(pick) 판정 없는 글 대체 기준을 고르는 데 쓰는 표: 섞은 점수 기준점별 정밀도·재현율 (사이트 겹 밖)
   const thresholds = t === 'funny' ? [50, 55, 60, 65, 70, 75].map((th) => ({ threshold: th, ...prf(chosen.scores, labels, th) })) : [];
 
   const full = train([...data.site, ...data.yt], t, cfg);

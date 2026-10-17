@@ -333,7 +333,7 @@ export async function relinkAll() {
 
 function prune() {
   const cutoff = Date.now() - config.retentionDays * 864e5;
-  // 소소한 이야기·소소한 웃음 게시판에 남아 있는 글(각 최근 BOARD_KEEP 개)은 오래돼도 지우지 않는다
+  // 핸드드립·푸어오버 게시판에 남아 있는 글(각 최근 BOARD_KEEP 개)은 오래돼도 지우지 않는다
   const kept = keptBoardIds();
   let removed = 0;
   for (const p of store.allPosts()) {
@@ -365,7 +365,7 @@ function prune() {
  * 예약 작업 주기(하루 2번 이상 = 12시간 간격 이하)보다 길게 — 사이에 클라우드가 403 을 받아 출처 상태를 실패로 덮지 않게.
  */
 export const PC_FEED_FRESH_MS = 13 * 3600e3;
-/** PC 미리보기를 글에 붙여 두는 기간 (소소한 이야기·소소한 웃음에 남은 글과 쇼츠 후보는 계속) — DO 메모리를 아끼려고 */
+/** PC 미리보기를 글에 붙여 두는 기간 (핸드드립·푸어오버에 남은 글과 쇼츠 후보는 계속) — DO 메모리를 아끼려고 */
 export const PC_READ_KEEP_MS = 3 * 864e5;
 /** 받아 넣기 요청 하나의 상한 (본문 64KB 한도와 별개로 개수도 막는다) */
 export const INGEST_MAX_ITEMS = 300;
@@ -521,7 +521,7 @@ export function setModelScore(fn) {
 }
 
 const clamp100 = (v) => Math.max(0, Math.min(100, Math.round(Number(v) || 0)));
-/** 판정 우선순위: "소소한 이야기"에 들려면 웃김과 분위기가 둘 다 있어야 해서 섞되, 분위기를 조금 더 본다 */
+/** 판정 우선순위: "핸드드립"에 들려면 웃김과 분위기가 둘 다 있어야 해서 섞되, 분위기를 조금 더 본다 */
 export const priorityOf = (s) => Math.round(s.funny * 0.45 + s.vibe * 0.55);
 
 /**

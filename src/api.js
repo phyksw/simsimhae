@@ -252,8 +252,8 @@ export function summarizeRead(data, from) {
 
 /**
  * 옛 기준 판정 다시 보기(review-queue?revisit=1) 대상: Claude 판정이 있지만 지금 기준 표시(ai.criteria = CRITERIA_VERSION)가 없고,
- * 유머 아님(not_humor)이거나 정상인데 분위기 점수가 소소한 이야기 기준(STORY_VIBE_MIN)에 못 미치는 글 — 새 기준(잡학 통과)이면 들 수 있는 글.
- * 관리자가 상태나 소소한 이야기 넣기/빼기를 정한 글, 키워드·본문 판정이 차단·므흣인 글, 금지 소재 상한(점수 모델 규칙)에 걸린 글,
+ * 유머 아님(not_humor)이거나 정상인데 분위기 점수가 핸드드립 기준(STORY_VIBE_MIN)에 못 미치는 글 — 새 기준(잡학 통과)이면 들 수 있는 글.
+ * 관리자가 상태나 핸드드립 넣기/빼기를 정한 글, 키워드·본문 판정이 차단·므흣인 글, 금지 소재 상한(점수 모델 규칙)에 걸린 글,
  * 대표 글이 남아 있는 사본은 뺀다.
  */
 function revisitable(p) {
@@ -413,7 +413,7 @@ export function createApi(host) {
     }
     // 본문 검사로 상태가 바뀌어 이제 볼 수 없게 됐다면 막는다
     if (!admin && (fresh.status === 'blocked' || (fresh.status === 'adult' && !isAdult(req)))) {
-      return res(409, { error: fresh.status === 'adult' ? '본문을 확인해 보니 므흣 게시판 글이라 옮겼어요' : '본문을 확인해 보니 걸러야 할 글이라 숨겼어요', status: fresh.status });
+      return res(409, { error: fresh.status === 'adult' ? '본문을 확인해 보니 그라운즈 게시판 글이라 옮겼어요' : '본문을 확인해 보니 걸러야 할 글이라 숨겼어요', status: fresh.status });
     }
     return ok({ post: serialize(fresh, { admin, groups: groupIndex(store.allPosts()) }), ...data });
   }
@@ -507,7 +507,7 @@ export function createApi(host) {
     const revisitList = all.filter(revisitable);
     const waiting = revisit ? revisitList : waitingOf(needVibe);
     const scores = await selectionScores(waiting);
-    // 다시 보기는 "소소한 이야기" 후보를 찾는 일이라 분위기 점수를 먼저 본다
+    // 다시 보기는 "핸드드립" 후보를 찾는 일이라 분위기 점수를 먼저 본다
     const key = revisit ? (s) => s.vibe * 1000 + s.priority : (s) => s.priority;
     let picked = waiting
       .sort((a, b) => key(scores.get(b.id)) - key(scores.get(a.id)) || String(b.firstSeenAt).localeCompare(String(a.firstSeenAt)) || a.id.localeCompare(b.id))

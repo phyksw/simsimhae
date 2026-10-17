@@ -1,4 +1,4 @@
-// 소소한 이야기·소소한 웃음: 기간 제한 없이 조건에 맞는 최근 BOARD_KEEP 개를 남기고, 그 글들은 보관 기간이 지나도 지우지 않는다.
+// 핸드드립·푸어오버: 기간 제한 없이 조건에 맞는 최근 BOARD_KEEP 개를 남기고, 그 글들은 보관 기간이 지나도 지우지 않는다.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
@@ -43,8 +43,8 @@ test('기간 제한 없이 최근 BOARD_KEEP 개만 남는다', () => {
   assert.ok(!kept.has('humoruniv:100'));
 });
 
-test('소소한 이야기는 Claude 판정(분위기 점수 포함)이 끝난 글만', () => {
-  // 키워드 점수만 높은 글 (Claude 판정 없음) → 소소한 이야기에 없음
+test('핸드드립은 Claude 판정(분위기 점수 포함)이 끝난 글만', () => {
+  // 키워드 점수만 높은 글 (Claude 판정 없음) → 핸드드립에 없음
   const kw = post(300, 0, null);
   kw.shortsScore = 95;
   store.upsertPost(kw);

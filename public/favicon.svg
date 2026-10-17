@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <!-- 심심풀이: 심드렁한 눈(반쯤 감김) + 슬쩍 올라간 입꼬리 + 작은 ㅋ 말풍선 -->
+  <!-- 브루잉: 심드렁한 눈(반쯤 감김) + 슬쩍 올라간 입꼬리 + 작은 ㅋ 말풍선 -->
   <g transform="rotate(-8 30 34)">
     <rect x="3" y="9" width="52" height="52" rx="19" fill="#FFC83D"/>
     <ellipse cx="13.5" cy="43" rx="5" ry="3.2" fill="#FF8A5B" opacity=".45"/>

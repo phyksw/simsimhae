@@ -1,5 +1,5 @@
 // 선별 점수 모델 (src/model/): 가중치 파일 모양, 점수 범위·결정성, 기준 쇼츠·금지 소재, 이상한 입력, 학습 스크립트 결정성,
-// filter.js 의 섞은 점수와 소소한 웃음 대체 기준.
+// filter.js 의 섞은 점수와 푸어오버 대체 기준.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -175,7 +175,7 @@ test('낱말 일부만 같은 제목(전성기·대처가·퇴근 전 와이프�
   }
 });
 
-test('소소한 웃음: 판정 없는 글은 조사가 끼거나 꼴이 바뀐 금지 소재(바람을 피웠·돈 안 갚는·암 걸렸·연인과 싸웠)도 대체 기준을 넘지 못한다', () => {
+test('푸어오버: 판정 없는 글은 조사가 끼거나 꼴이 바뀐 금지 소재(바람을 피웠·돈 안 갚는·암 걸렸·연인과 싸웠)도 대체 기준을 넘지 못한다', () => {
   const med = { likes: 20, comments: 10 };
   for (const title of [...FORBIDDEN.romance, ...FORBIDDEN.heavy, '돈 안 갚는 친구한테 보낸 카톡']) {
     for (const source of ['dogdrip', 'humoruniv', 'todayhumor', 'fmkorea']) {
@@ -186,7 +186,7 @@ test('소소한 웃음: 판정 없는 글은 조사가 끼거나 꼴이 바뀐 �
   }
 });
 
-test('소소한 웃음: 옛 기준 Claude 판정(기준 표시 없음)은 금지 소재 상한도 함께 보고, 지금 기준 판정은 그대로 믿는다', () => {
+test('푸어오버: 옛 기준 Claude 판정(기준 표시 없음)은 금지 소재 상한도 함께 보고, 지금 기준 판정은 그대로 믿는다', () => {
   const base = { source: 'humoruniv', status: 'ok', manual: null, shortsScore: 0 };
   // 실제 사이트에 옛 기준 ok 로 남아 있던 §6.5 금지 소재 글
   const stuck = ['남편이 친자검사를 요구해서 곤란해요', '축의금 슈킹 레전드..jpg', '남자들의 난제', '경비원 면접 오라는데 걍 안갔다 씨발', '과외해줬던 여자애한테 연락옴', '회사 경리랑 데이트 한다고 카톡 인증한 디씨인', '친오빠가 10년 사귀었던 전여친이 나한테 따로 연락한 이유', '아버지를 살린 아들 감동실화', '나 과자고르고있는데 내앞에서 커플 헤어졌어.jpg'];
@@ -261,7 +261,7 @@ test('판정 대기열 순서(crawler.selectionScores): 실제 점수 모델을 
   assert.ok(posts.slice(0, 3).every((p) => s.get(p.id).priority > s.get('todayhumor:9').priority), '기준 쇼츠가 금지 소재보다 앞');
 });
 
-test('소소한 웃음: 판정 없는 글은 섞은 점수 ≥ 대체 기준이고 금지 소재가 아닐 때만', () => {
+test('푸어오버: 판정 없는 글은 섞은 점수 ≥ 대체 기준이고 금지 소재가 아닐 때만', () => {
   const base = { source: 'humoruniv', status: 'ok', ai: null, manual: null };
   assert.ok(boards.pickWorthy({ ...base, title: '요청사항 들어준 택배기사님', shortsScore: boards.PICK_FALLBACK_MIN }));
   assert.ok(!boards.pickWorthy({ ...base, title: '요청사항 들어준 택배기사님', shortsScore: boards.PICK_FALLBACK_MIN - 1 }));

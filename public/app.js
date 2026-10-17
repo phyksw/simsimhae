@@ -1,4 +1,4 @@
-// 심심풀이 프런트엔드 (의존성 없는 바닐라 JS). 본문 HTML 외에는 innerHTML 을 쓰지 않는다.
+// 브루잉 프런트엔드 (의존성 없는 바닐라 JS). 본문 HTML 외에는 innerHTML 을 쓰지 않는다.
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -59,7 +59,7 @@ const state = {
 };
 
 const STAGES = { candidate: '후보', script: '대본 작성', done: '촬영 완료' };
-const VERDICT_LABEL = { ok: '정상', politics: '정치', hate: '혐오', dark: '사건사고', adult: '므흣', not_humor: '유머 아님' };
+const VERDICT_LABEL = { ok: '정상', politics: '정치', hate: '혐오', dark: '사건사고', adult: '그라운즈', not_humor: '유머 아님' };
 
 /**
  * 어디서 열렸는지 (/api/meta 의 mode).
@@ -219,10 +219,10 @@ async function loadMeta() {
 }
 
 function boardName(board) {
-  if (board === 'story') return '☕ 소소한 이야기';
-  if (board === 'pick') return '😄 소소한 웃음';
+  if (board === 'story') return '☕ 핸드드립';
+  if (board === 'pick') return '😄 푸어오버';
   if (board === 'all') return '전체';
-  if (board === 'adult') return '🔒 므흣';
+  if (board === 'adult') return '🔒 그라운즈';
   if (board === 'shorts') return '🎬 쇼츠 후보함';
   if (board === 'filtered') return '🚫 걸러진 글';
   return state.sources[board]?.name || board;
@@ -245,11 +245,11 @@ function renderBoards() {
       extra.count != null ? h('span', { class: 'count' }, extra.count) : null,
     );
   nav.replaceChildren(...kids(
-    chip('story', '☕ 소소한 이야기', { count: bc.story }),
-    chip('pick', '😄 소소한 웃음', { count: bc.pick ?? m.pickCount }),
+    chip('story', '☕ 핸드드립', { count: bc.story }),
+    chip('pick', '😄 푸어오버', { count: bc.pick ?? m.pickCount }),
     chip('all', '전체', { count: total }),
     ...m.sources.map((s) => chip(s.id, s.short, { swatch: s.color, count: s.count, title: s.name + (s.active ? '' : ' (수집 꺼짐)'), cls: s.active ? '' : 'inactive' })),
-    chip('adult', m.adult ? '🔓 므흣' : '🔒 므흣', { cls: 'special', title: '비밀번호로 잠긴 게시판', count: m.adult ? bc.adult : null }),
+    chip('adult', m.adult ? '🔓 그라운즈' : '🔒 그라운즈', { cls: 'special', title: '비밀번호로 잠긴 게시판', count: m.adult ? bc.adult : null }),
     m.admin ? chip('shorts', '🎬 후보함', { cls: 'special', count: bc.shorts ?? m.stats?.shorts }) : null,
     m.admin ? chip('filtered', '🚫 걸러진 글', { cls: 'special', count: filteredCount }) : null,
   ));
@@ -319,10 +319,10 @@ function renderAdminBar() {
   const statLink = (label, value, board, title) =>
     h('a', { class: `stat${state.board === board ? ' on' : ''}`, href: `#/b/${board}`, title }, label, h('b', {}, value ?? 0));
   $('#admin-stats').replaceChildren(
-    statLink('☕ 소소한 이야기', m.boardCounts?.story, 'story', '소소한 이야기 보기'),
-    statLink('😄 소소한 웃음', m.pickCount, 'pick', '소소한 웃음 보기'),
+    statLink('☕ 핸드드립', m.boardCounts?.story, 'story', '핸드드립 보기'),
+    statLink('😄 푸어오버', m.pickCount, 'pick', '푸어오버 보기'),
     statLink('공개', st.public, 'all', '공개된 전체 글 보기'),
-    statLink('므흣', st.adult, 'adult', '므흣 잠금 게시판 보기'),
+    statLink('그라운즈', st.adult, 'adult', '그라운즈 잠금 게시판 보기'),
     statLink('걸러짐', st.blocked, 'filtered', '걸러진 글 보기 — 여기서 [게시하기]로 공개할 수 있어요'),
     statLink('검수 대기', st.pending, 'filtered', 'Claude 검수를 기다리는 글 (걸러진 글함에 함께 보여요)'),
     statLink('후보', st.shorts, 'shorts', '쇼츠 후보함 보기'),
@@ -603,7 +603,7 @@ function renderRow(p) {
   if (admin) {
     const tags = [];
     if (p.shorts) tags.push(h('span', { class: 'tag shorts' }, `🎬 ${STAGES[p.shorts.stage]}`));
-    if (p.manual) tags.push(h('span', { class: 'tag' }, `수동: ${p.manual === 'ok' ? '게시' : p.manual === 'adult' ? '므흣' : '숨김'}`));
+    if (p.manual) tags.push(h('span', { class: 'tag' }, `수동: ${p.manual === 'ok' ? '게시' : p.manual === 'adult' ? '그라운즈' : '숨김'}`));
     if (p.aiPending) tags.push(h('span', { class: 'tag pending' }, 'Claude 검수 대기'));
     for (const r of p.auto?.reasons || []) tags.push(h('span', { class: 'tag kw', title: '키워드 필터' }, `키워드 · ${r}`));
     if (p.ai && p.ai.verdict !== 'ok') tags.push(h('span', { class: 'tag ai', title: `Claude (${p.ai.model})` }, `Claude · ${VERDICT_LABEL[p.ai.verdict] || p.ai.verdict}${p.ai.reason ? ` — ${p.ai.reason}` : ''}`));
@@ -626,14 +626,14 @@ function rowActions(p) {
   const act = (label, patch, cls = '') =>
     h('button', { class: `btn sm ${cls}`, type: 'button', onclick: (e) => adminUpdate(p, patch, e.currentTarget.closest('.post')) }, label);
   if (state.board === 'filtered' || p.status === 'blocked') {
-    wrap.append(act('게시하기', { manual: 'ok' }, 'primary'), act('므흣으로', { manual: 'adult' }));
+    wrap.append(act('게시하기', { manual: 'ok' }, 'primary'), act('그라운즈로', { manual: 'adult' }));
     if (p.manual) wrap.append(act('자동 판정으로', { manual: null }, 'ghost'));
   } else {
-    if (p.status === 'ok') wrap.append(act('숨기기', { manual: 'blocked' }, 'danger'), act('므흣으로', { manual: 'adult' }));
+    if (p.status === 'ok') wrap.append(act('숨기기', { manual: 'blocked' }, 'danger'), act('그라운즈로', { manual: 'adult' }));
     if (p.status === 'adult') wrap.append(act('일반 게시판으로', { manual: 'ok' }), act('숨기기', { manual: 'blocked' }, 'danger'));
   }
   if (p.status === 'ok') {
-    wrap.append(p.inStory ? act('☕ 소소한 이야기에서 빼기', { vibe: false }, 'ghost') : act('☕ 소소한 이야기로', { vibe: true }));
+    wrap.append(p.inStory ? act('☕ 핸드드립에서 빼기', { vibe: false }, 'ghost') : act('☕ 핸드드립으로', { vibe: true }));
     if (p.manualVibe !== null && p.manualVibe !== undefined) wrap.append(act('이야기 자동 판정으로', { vibe: null }, 'ghost'));
   }
   if (p.shorts) {
@@ -654,16 +654,16 @@ async function adminUpdate(p, patch, rowEl) {
         ? patch.manual === 'ok'
           ? '공개 목록에 게시했어요'
           : patch.manual === 'adult'
-            ? '므흣 게시판으로 옮겼어요'
+            ? '그라운즈로 옮겼어요'
             : patch.manual === 'blocked'
               ? '숨겼어요 (걸러진 글함에 있어요)'
               : '자동 판정으로 되돌렸어요'
         : 'vibe' in patch
           ? patch.vibe === true
-            ? '☕ 소소한 이야기에 넣었어요'
+            ? '☕ 핸드드립에 넣었어요'
             : patch.vibe === false
-              ? '☕ 소소한 이야기에서 뺐어요'
-              : '소소한 이야기 자동 판정으로 되돌렸어요'
+              ? '☕ 핸드드립에서 뺐어요'
+              : '핸드드립 자동 판정으로 되돌렸어요'
           : patch.shorts === null
             ? '후보에서 뺐어요'
             : `쇼츠 ${STAGES[patch.shorts.stage]}(으)로 표시했어요`;
@@ -933,7 +933,7 @@ function renderReaderAdmin(p, draft) {
   async function save(patch) {
     const row = $(`.post[data-id="${CSS.escape(p.id)}"]`);
     const updated = await adminUpdate(p, patch, row);
-    // 게시/숨기기/므흣/자동 판정은 메모를 보내지 않으므로, 입력 중이던 메모를 그대로 살린다
+    // 게시/숨기기/그라운즈/자동 판정은 메모를 보내지 않으므로, 입력 중이던 메모를 그대로 살린다
     if (updated && readerPost === p) renderReaderAdmin(updated, 'shorts' in patch ? undefined : note.value);
   }
   const reasons = [
@@ -948,7 +948,7 @@ function renderReaderAdmin(p, draft) {
       p.shorts ? h('button', { class: 'btn sm ghost', type: 'button', onclick: () => save({ shorts: null }) }, '후보 빼기') : null,
       h('span', { class: 'spacer' }),
       p.status !== 'ok' ? h('button', { class: 'btn sm primary', type: 'button', onclick: () => save({ manual: 'ok' }) }, '게시하기') : h('button', { class: 'btn sm danger', type: 'button', onclick: () => save({ manual: 'blocked' }) }, '숨기기'),
-      p.status !== 'adult' ? h('button', { class: 'btn sm', type: 'button', onclick: () => save({ manual: 'adult' }) }, '므흣으로') : null,
+      p.status !== 'adult' ? h('button', { class: 'btn sm', type: 'button', onclick: () => save({ manual: 'adult' }) }, '그라운즈로') : null,
       p.manual ? h('button', { class: 'btn sm ghost', type: 'button', onclick: () => save({ manual: null }) }, '자동 판정으로') : null,
     ),
     note,
@@ -1099,7 +1099,7 @@ let unlockPending = null; // 목록과 미리보기가 동시에 잠금 해제�
 function unlockAdult() {
   if (!unlockPending) {
     const run = (async () => {
-      const ok = await promptPassword({ title: '🔒 므흣 게시판', desc: '성인용 게시판이에요. 비밀번호를 입력하세요. (12시간 동안 열려 있어요)', endpoint: UNLOCK_ENDPOINT });
+      const ok = await promptPassword({ title: '🔒 그라운즈', desc: '성인용 게시판이에요. 비밀번호를 입력하세요. (12시간 동안 열려 있어요)', endpoint: UNLOCK_ENDPOINT });
       if (ok) {
         await loadMeta().catch(() => {});
         toast('잠금을 풀었어요');

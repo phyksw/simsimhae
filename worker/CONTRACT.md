@@ -28,7 +28,7 @@ Worker 는 걸러서 자르기만 한다. 글 목록 전체는 D1 의 스냅샷 
 ```jsonc
 {
   "version": "2026-10-17T03:00:00.000Z",   // 만든 시각 (같은 버전이면 Worker 는 무시해도 됨)
-  "siteName": "심심풀이",
+  "siteName": "브루잉",
   "lastCrawlAt": "2026-10-17T02:59:40.000Z",
   "sources": [                              // 방문자에게 보일 출처 (로컬 /api/meta 의 sources 와 같은 기준)
     { "id": "dogdrip", "name": "개드립 인기글", "short": "개드립", "color": "#2b3a55", "homepage": "https://…",

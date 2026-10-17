@@ -192,11 +192,11 @@ function seedPost(id, min, extra = {}) {
 }
 const aiOk = (score) => ({ verdict: 'ok', shortsScore: score, reason: '', model: 'test', at: ago(1) });
 const SEED = [
-  // 소소한 이야기
+  // 핸드드립
   seedPost('humoruniv:101', 1, { manualVibe: true, likes: 50 }),
   seedPost('fmkorea:7', 2, { manualVibe: true, likes: 20 }), // 미리보기 본문 검사로 차단됨
   seedPost('dogdrip:103', 3, { manualVibe: true, likes: 30 }),
-  // 소소한 웃음
+  // 푸어오버
   seedPost('todayhumor:201', 4, { manualVibe: false, ai: aiOk(80), likes: 70 }),
   seedPost('dcinside:202', 5, { manualVibe: false, ai: aiOk(75), likes: 10 }),
   // 전체
@@ -217,10 +217,10 @@ const SEED = [
   seedPost('inven:901', 17, { manual: 'blocked' }),
   seedPost('dogdrip:902', 1.5, { aiPending: true }), // Claude 검수 대기
 ];
-// 미리보기를 올리는 순서: 소소한 이야기 → 소소한 웃음 → 전체 → 므흣 → 나머지, 게시판 안에서는 최신순
+// 미리보기를 올리는 순서: 핸드드립 → 푸어오버 → 전체 → 므흣 → 나머지, 게시판 안에서는 최신순
 const ATTEMPT_ORDER = [
   'humoruniv:101', 'fmkorea:7', 'dogdrip:103',
-  'todayhumor:201', 'dcinside:202', 'dcinside:601', // 10일 지난 글도 소소한 웃음에 남아 있음
+  'todayhumor:201', 'dcinside:202', 'dcinside:601', // 10일 지난 글도 푸어오버에 남아 있음
   'humoruniv:301', 'inven:66', 'dogdrip:303', 'todayhumor:401', 'humoruniv:502',
   'humoruniv:801', 'dcinside:803',
   'dogdrip:402',
@@ -303,7 +303,7 @@ test('서버 시작 시 한 번: 상태 확인 → 미리보기(우선순위, �
 
   const snap = w.snapshots[0];
   assert.ok(!Number.isNaN(Date.parse(snap.version)));
-  assert.equal(snap.siteName, '심심풀이');
+  assert.equal(snap.siteName, '브루잉');
   assert.equal(snap.lastCrawlAt, ago(3));
   const ids = snap.posts.map((p) => p.id).sort();
   const expected = SEED.map((p) => p.id).filter((id) => !['fmkorea:7', 'dcinside:501', 'inven:901', 'dogdrip:902', 'dogdrip:802'].includes(id)).sort();
@@ -337,7 +337,7 @@ test('서버 시작 시 한 번: 상태 확인 → 미리보기(우선순위, �
   });
 });
 
-test('미리보기는 지금 올리기마다 3개씩, 소소한 이야기 → 소소한 웃음 → 전체 → 므흣 → 나머지 순서로 모두 올라간다', async () => {
+test('미리보기는 지금 올리기마다 3개씩, 핸드드립 → 푸어오버 → 전체 → 므흣 → 나머지 순서로 모두 올라간다', async () => {
   await idle();
   for (let i = 0; i < 8; i++) {
     const before = w.readLog.length;
@@ -492,7 +492,7 @@ test('동시에 두 번 돌지 않는다: 도는 중에 온 요청은 끝난 뒤
 
 test('Worker 저장소가 비어 있으면(새로 만듦) 미리보기를 처음부터 다시 올린다', async () => {
   await idle();
-  // 기대 순서: 지금 로컬 목록의 소소한 이야기 → 소소한 웃음 → 전체 (최신순), 못 읽어 쉬는 글·꺼진 출처의 글은 빼고 3개
+  // 기대 순서: 지금 로컬 목록의 핸드드립 → 푸어오버 → 전체 (최신순), 못 읽어 쉬는 글·꺼진 출처의 글은 빼고 3개
   const order = [];
   for (const b of ['story', 'pick', 'all']) for (const it of (await api(`/api/posts?board=${b}&size=100`, { headers: H })).json.items) if (!order.includes(it.id)) order.push(it.id);
   const expected = order.filter((id) => !['inven:66', 'quasarzone:701'].includes(id)).slice(0, 3);

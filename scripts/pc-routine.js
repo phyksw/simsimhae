@@ -12,7 +12,7 @@
 //       collect·prepare: --sources dogdrip,todayhumor,ppomppu  --pages 2  --previews 20
 //       queue·prepare:   --limit 60(대기열에서 받을 글 수)  --top 20(사이트가 본문을 붙여 줄 상위 글 수)  --vibe(판정은 정상인데 분위기 점수가 없는 글)
 //                        --read-budget 180(사이트가 본문을 못 준 글을 이 PC 에서 직접 읽는 시간 예산, 초. 0 이면 읽지 않음, 최대 86400)
-//                        --revisit [30](옛 기준으로 판정된 글 중 새 기준이면 소소한 이야기에 들 만한 글을 batch 뒤에 N개 더, 기본은 하지 않음)
+//                        --revisit [30](옛 기준으로 판정된 글 중 새 기준이면 핸드드립에 들 만한 글을 batch 뒤에 N개 더, 기본은 하지 않음)
 // 판정 기준: review/INSTRUCTIONS.md 에 src/model/STYLE.md §7 문장·점수표를 그대로 넣는다 (src/ai.js 의 CRITERIA·VIBE_TABLE 과 같은 문장).
 // 예약 작업에 붙여 넣을 Claude 지시문: scripts/pc-routine-task.md
 // 비밀번호: 환경변수 CLOUD_ADMIN_PASSWORD → data/secrets.json 의 adminPassword(DATA_DIR 을 따름) → (터미널이면) 물어본다. 화면에 찍지 않는다.
@@ -721,7 +721,7 @@ export function instructionsText({ batchName, verdictName, vibe = false, criteri
     `   - ${c('뺌: <id> — <이유>')} 와 ${c('형식이 틀려 뺌 N개')}: 그 항목만 빠졌다. 결과 파일에서 그 항목만 고쳐 5번 명령을 다시 실행한다 (이미 반영된 글은 같은 판정으로 덮어쓸 뿐이다).`,
     `   - ${c('뺌: <id> — batch 에 없는 글')}: batch 에 없는 id 라 올리지 않았다. id 를 batch 의 것과 맞게 고친다 (지어낸 id·다른 batch 의 id 를 넣지 않는다).`,
     `   - ${c('판정 파일에 없는 글 N개')}: 판정 파일에 아예 없는 글(빠뜨린 글, 위에서 뺀 항목은 세지 않는다). 판정해 넣고 다시 올리거나, 그냥 두면 다음 batch 에 다시 나온다.`,
-    `   - ${c('소소한 이야기 조건 … 에 드는 글 N개')}: 올린 판정 중 소소한 이야기 게시판 조건에 맞는 글 (보고에 그대로 옮긴다).`,
+    `   - ${c('핸드드립 조건 … 에 드는 글 N개')}: 올린 판정 중 핸드드립 게시판 조건에 맞는 글 (보고에 그대로 옮긴다).`,
     `   - ${c('실패: …')} 로 끝나면(로그인·연결 오류) 다시 시도하지 말고 그 줄을 그대로 보고한다. 비밀번호는 묻지도, 찾아 열지도, 찍지도 않는다.`,
     `7. 끝. 지난 ${c('batch-*.json')} 은 다시 판정하지 않는다: 올린 글은 사이트의 판정 대기열에서 빠지므로, 다음 ${c('queue')}·${c('prepare')} 가 새로 만드는 batch 에는 아직 판정하지 않은 글(다시 보기는 아직 새 기준으로 판정하지 않은 글)만 나온다.`,
     '',
@@ -736,7 +736,7 @@ export function instructionsText({ batchName, verdictName, vibe = false, criteri
   );
   if (criteria.summary) L.push('한 줄 요약 (STYLE.md §1):', '', criteria.summary, '');
   L.push(
-    '운영자 피드백: 지금 "소소한 이야기" 선별이 이 쇼츠들과 결이 다르고, 더 많이 뽑아 달라.',
+    '운영자 피드백: 지금 "핸드드립" 선별이 이 쇼츠들과 결이 다르고, 더 많이 뽑아 달라.',
     '단 성희롱 같은 무거운 소재, 분노, 연애 갈등, 남녀 일반화는 절대 안 된다.',
     '',
     `## 판정 기준${criteria.from ? ` (${criteria.from} 그대로)` : ''}`,
@@ -751,7 +751,7 @@ export function instructionsText({ batchName, verdictName, vibe = false, criteri
       `이 batch 의 글은 이미 ${c('verdict: "ok"')} 판정을 받았다 (항목의 ${c('ai')}). ${c('vibe')} 만 매긴다:`,
       '',
       `- ${c('vibe')} (0~100): 위 점수표 그대로. 탈락 조건에 하나라도 걸리면 0~49, 애매하면 69 이하.`,
-      `- **소소한 이야기** 게시판에는 shortsScore ${th.storyFunny} 이상 + vibe ${th.storyVibe} 이상인 글이 들어간다. 기준에 맞는 글은 아끼지 말고 ${th.storyVibe} 이상을 주고, 탈락 조건에 걸리는 글은 절대 넘기지 않는다.`,
+      `- **핸드드립** 게시판에는 shortsScore ${th.storyFunny} 이상 + vibe ${th.storyVibe} 이상인 글이 들어간다. 기준에 맞는 글은 아끼지 말고 ${th.storyVibe} 이상을 주고, 탈락 조건에 걸리는 글은 절대 넘기지 않는다.`,
       '',
     );
   } else {
@@ -768,7 +768,7 @@ export function instructionsText({ batchName, verdictName, vibe = false, criteri
       '  "신기한 이유"로 끝나는 잡학은 신기한 정도를 웃긴 정도로 쳐서 매긴다(가볍게 신기하면 55~70). 탈락 조건에 걸리면 40 이하.',
       `- ${c('vibe')} (0~100): 위 점수표 그대로. 애매하면 69 이하.`,
       `- ${c('verdict')} 가 ${c('ok')} 가 아니면 ${c('shortsScore')}·${c('vibe')} 는 0.`,
-      `- 게시판: **소소한 이야기** = ok + shortsScore ${th.storyFunny} 이상 + vibe ${th.storyVibe} 이상, **소소한 웃음** = ok + shortsScore ${th.pickFunny} 이상.`,
+      `- 게시판: **핸드드립** = ok + shortsScore ${th.storyFunny} 이상 + vibe ${th.storyVibe} 이상, **푸어오버** = ok + shortsScore ${th.pickFunny} 이상.`,
       '  기준에 맞는 글은 아끼지 말고 통과 점수를 주고, 탈락 조건에 걸리는 글은 절대 넘기지 않는다.',
       '',
     );
@@ -1208,9 +1208,9 @@ function recordFailure(dir, file, why) {
 
 /**
  * 판정 올리기 + review/state.json 에 기록. 틀린 항목(checkVerdicts)과 짝 batch 에 없는 id 는 빼고 올리고, 뺀 수·사유와 batch 에서 빠뜨린 글 수,
- * 소소한 이야기 조건에 드는 글을 알린다. 올릴 항목이 하나도 없거나 파일을 읽지 못하면 그 파일을 "올리지 못함" 으로 남긴다.
+ * 핸드드립 조건에 드는 글을 알린다. 올릴 항목이 하나도 없거나 파일을 읽지 못하면 그 파일을 "올리지 못함" 으로 남긴다.
  * @returns {Promise<{applied: number, skipped: string[], rejected: Array<{id: string|null, why: string}>, outside: string[], missing: string[], story: string[]}>}
- *   outside: batch 에 없는 id (올리지 않음), missing: batch 에는 있는데 판정 파일에 아예 없는 글 (뺀 항목은 세지 않음), story: 소소한 이야기 조건에 드는 글
+ *   outside: batch 에 없는 id (올리지 않음), missing: batch 에는 있는데 판정 파일에 아예 없는 글 (뺀 항목은 세지 않음), story: 핸드드립 조건에 드는 글
  */
 export async function apply({ origin, password, file, dir = path.join(ROOT, 'review'), fetch: f, log = () => {}, boardsFile }) {
   const name = path.basename(file);
@@ -1290,7 +1290,7 @@ export async function apply({ origin, password, file, dir = path.join(ROOT, 'rev
   writeState(dir, state);
   log(`판정 반영 ${r.applied}개${r.skipped.length ? `, 사이트가 건너뜀 ${r.skipped.length}개 (없는 글)` : ''}${rejected.length ? `, 형식이 틀려 뺌 ${rejected.length}개` : ''}${outside.length ? `, batch 에 없는 글이라 뺌 ${outside.length}개` : ''}`);
   if (missing.length) log(`판정 파일에 없는 글 ${missing.length}개 (batch 에는 있음, 다음 대기열에 다시 나온다): ${missing.slice(0, 10).join(', ')}${missing.length > 10 ? ' …' : ''}`);
-  // 소소한 이야기 조건 (src/boards.js storyWorthy 와 같은 기준 점수): 분위기 점수만 매기는 batch 는 batch 의 판정(ai)으로
+  // 핸드드립 조건 (src/boards.js storyWorthy 와 같은 기준 점수): 분위기 점수만 매기는 batch 는 batch 의 판정(ai)으로
   const th = boardThresholds(boardsFile);
   const sent = new Set(r.skipped);
   const story = items
@@ -1301,7 +1301,7 @@ export async function apply({ origin, password, file, dir = path.join(ROOT, 'rev
     })
     .map((x) => x.id);
   const titles = story.slice(0, 5).map((id) => batch?.byId.get(id)?.title || id);
-  log(`소소한 이야기 조건(ok + shortsScore ${th.storyFunny} 이상 + vibe ${th.storyVibe} 이상)에 드는 글 ${story.length}개${story.length ? `: ${titles.join(' / ')}${story.length > 5 ? ' …' : ''}` : ''}`);
+  log(`핸드드립 조건(ok + shortsScore ${th.storyFunny} 이상 + vibe ${th.storyVibe} 이상)에 드는 글 ${story.length}개${story.length ? `: ${titles.join(' / ')}${story.length > 5 ? ' …' : ''}` : ''}`);
   return { applied: r.applied, skipped: r.skipped, rejected, outside, missing, story };
 }
 

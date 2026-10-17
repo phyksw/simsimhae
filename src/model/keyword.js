@@ -56,7 +56,7 @@ export function keywordShorts(post, medians = {}) {
 }
 
 /**
- * "소소한 이야기" 분위기 키워드 점수 0~100 (제목 기반 어림값).
+ * "핸드드립" 분위기 키워드 점수 0~100 (제목 기반 어림값).
  * 글자로 된 썰·대화·반응·말의 재미면 높고, 사진·움짤·영상 위주이거나 분노·갈등·무거운 소재면 낮다.
  * @param {{title?: string, source?: string}} post
  */

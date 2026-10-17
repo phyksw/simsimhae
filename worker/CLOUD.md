@@ -13,7 +13,7 @@
                                      = 지금의 src/server.js 한 프로세스와 같은 역할
                                      ├─ 상태: 메모리(src/store.js) + DO SQLite 저장소에 영속
                                      ├─ 알람: 실시간 ON 이면 intervalMin 마다 crawlAll() (수집 → 키워드 판정 → [API 키 있으면 Claude] → 점수·묶음)
-                                     ├─ 미리보기: 열 때 원문에서 가져와 sanitize, DO 저장소에 캐시 (+ 알람 때 소소한 이야기·소소한 웃음 일부 미리 준비)
+                                     ├─ 미리보기: 열 때 원문에서 가져와 sanitize, DO 저장소에 캐시 (+ 알람 때 핸드드립·푸어오버 일부 미리 준비)
                                      └─ API: src/server.js 와 같은 경로·같은 응답 모양 (관리자 포함)
 Cron (*/5) ──> Worker scheduled() ──> SiteDO 알람이 살아 있는지 확인(없으면 다시 건다)
 ```
