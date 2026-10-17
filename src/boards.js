@@ -3,11 +3,15 @@ import * as store from './store.js';
 import { isPending, isPublic, groupKey, onePerGroup } from './store.js';
 import { vibeGuess } from './filter.js';
 
+/**
+ * 소소한 이야기(story)·웃긴 것만(pick) 게시판에 남겨 두는 글 수: 기간 제한 없이, 조건에 맞는 글 중 가장 최근에 들어온 N개.
+ * 이 안에 든 글은 보관 기간(RETENTION_DAYS)이 지나도 지우지 않는다 (crawler.js prune).
+ */
+export const BOARD_KEEP = Math.max(10, Number(process.env.BOARD_KEEP) || 100);
+
 /** 웃긴 것만(pick): 공개 글 중 "그냥 웃긴" 글. Claude 판정이 있으면 그걸, 없으면 키워드 점수를 본다. */
 export const PICK_MIN = 65;
-const PICK_DAYS = 7;
 export function pickWorthy(p) {
-  if (Date.now() - new Date(p.firstSeenAt).getTime() > PICK_DAYS * 864e5) return false;
   if (p.manual === 'ok' && p.shorts) return true;
   if (p.ai) return p.ai.verdict === 'ok' && p.ai.shortsScore >= PICK_MIN;
   return (p.shortsScore ?? 0) >= PICK_MIN - 5;
@@ -23,7 +27,6 @@ export function vibeOf(p) {
 export const STORY_VIBE_MIN = 70;
 const STORY_FUNNY_MIN = 55;
 export function storyWorthy(p) {
-  if (Date.now() - new Date(p.firstSeenAt).getTime() > PICK_DAYS * 864e5) return false;
   if (p.manualVibe === true) return true;
   if (p.manualVibe === false) return false;
   if (p.ai) return p.ai.verdict === 'ok' && p.ai.shortsScore >= STORY_FUNNY_MIN && vibeOf(p) >= STORY_VIBE_MIN;
@@ -42,9 +45,9 @@ export function boardPosts(board, { admin = false, adult = false, stage = '' } =
     case 'all':
       return onePerGroup(all.filter(isPublic));
     case 'pick':
-      return onePerGroup(all.filter(isPublic)).filter(pickWorthy);
+      return newestKept(onePerGroup(all.filter(isPublic)).filter(pickWorthy));
     case 'story':
-      return onePerGroup(all.filter(isPublic)).filter(storyWorthy);
+      return newestKept(onePerGroup(all.filter(isPublic)).filter(storyWorthy));
     case 'adult':
       return adult ? onePerGroup(all.filter((p) => p.status === 'adult' && !isPending(p))) : null;
     case 'filtered':
@@ -54,6 +57,19 @@ export function boardPosts(board, { admin = false, adult = false, stage = '' } =
     default:
       return all.filter((p) => p.source === board && isPublic(p));
   }
+}
+
+/** 들어온 순서(firstSeenAt)로 가장 최근 BOARD_KEEP 개만 */
+function newestKept(posts) {
+  if (posts.length <= BOARD_KEEP) return posts;
+  return [...posts]
+    .sort((a, b) => String(b.firstSeenAt).localeCompare(String(a.firstSeenAt)) || a.id.localeCompare(b.id))
+    .slice(0, BOARD_KEEP);
+}
+
+/** 소소한 이야기·웃긴 것만 게시판에 남아 있는 글 id (보관 기간이 지나도 지우지 않을 글) */
+export function keptBoardIds(all = store.allPosts()) {
+  return new Set([...boardPosts('story', {}, all), ...boardPosts('pick', {}, all)].map((p) => p.id));
 }
 
 /** 방문자에게 보일 출처인지: 수집 중이거나, 수집을 껐어도 공개 글이 남은 출처 (/api/meta 와 공개 스냅샷이 같은 기준) */

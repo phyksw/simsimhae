@@ -208,7 +208,7 @@ const SEED = [
   seedPost('dcinside:501', 11, { manual: 'blocked' }), // 대표 글이 숨김 → 사본이 대신 전체에
   seedPost('humoruniv:502', 12, { manual: 'ok', dupOf: 'dcinside:501', likes: 8 }),
   seedPost('quasarzone:701', 13, { likes: 9 }), // 수집을 끈 출처 (자동으로 읽으러 가지 않음)
-  seedPost('dcinside:601', 10 * 1440, { ai: aiOk(90), likes: 100 }), // 7일 지나 픽에서 빠짐
+  seedPost('dcinside:601', 10 * 1440, { ai: aiOk(90), likes: 100 }), // 10일 지났어도 픽에 남음 (기간 제한 없이 최근 BOARD_KEEP 개)
   // 므흣
   seedPost('humoruniv:801', 14, { manual: 'adult', likes: 60 }),
   seedPost('dogdrip:802', 15, { manual: 'adult', likes: 5, dupOf: 'humoruniv:801' }), // 므흣 게시판에선 묶여 안 보임 → 올리지 않음
@@ -220,8 +220,8 @@ const SEED = [
 // 미리보기를 올리는 순서: 썰·대화 → 웃긴 것만 → 전체 → 므흣 → 나머지, 게시판 안에서는 최신순
 const ATTEMPT_ORDER = [
   'humoruniv:101', 'fmkorea:7', 'dogdrip:103',
-  'todayhumor:201', 'dcinside:202',
-  'humoruniv:301', 'inven:66', 'dogdrip:303', 'todayhumor:401', 'humoruniv:502', 'dcinside:601',
+  'todayhumor:201', 'dcinside:202', 'dcinside:601', // 10일 지난 글도 웃긴 것만에 남아 있음
+  'humoruniv:301', 'inven:66', 'dogdrip:303', 'todayhumor:401', 'humoruniv:502',
   'humoruniv:801', 'dcinside:803',
   'dogdrip:402',
 ];
@@ -315,7 +315,7 @@ test('서버 시작 시 한 번: 상태 확인 → 미리보기(우선순위, �
   assert.deepEqual(by['todayhumor:201'].boards, ['pick', 'all', 'todayhumor']);
   assert.deepEqual(by['dogdrip:402'].boards, ['dogdrip'], '묶인 사본은 출처별 게시판에만');
   assert.deepEqual(by['humoruniv:502'].boards, ['all', 'humoruniv'], '대표 글이 숨김이면 사본이 전체에');
-  assert.deepEqual(by['dcinside:601'].boards, ['all', 'dcinside'], '7일 지난 글은 픽에서 빠짐');
+  assert.deepEqual(by['dcinside:601'].boards, ['pick', 'all', 'dcinside'], '오래된 글도 최근 BOARD_KEEP 개 안이면 픽에 남음');
   assert.deepEqual(by['humoruniv:801'].boards, ['adult']);
   assert.deepEqual(by['humoruniv:801'].alsoOn, [{ source: 'dogdrip', url: 'https://dogdrip.example.invalid/802' }], '묶여 안 보이는 므흣 사본은 같은 글 배지로');
   assert.deepEqual(by['todayhumor:401'].alsoOn, [{ source: 'dogdrip', url: 'https://dogdrip.example.invalid/402' }]);
