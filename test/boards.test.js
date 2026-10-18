@@ -62,3 +62,24 @@ test('핸드드립은 Claude 판정(분위기 점수 포함)이 끝난 글만', 
   store.upsertPost(m);
   assert.ok(boardPosts('story').map((p) => p.id).includes('humoruniv:300'));
 });
+
+test('인기순: 작은 사이트의 "그 사이트 1등"(조회 98·추천 5)이 큰 사이트 인기글보다 위로 올라오지 않는다', async () => {
+  const { hotScores, HOT_GLOBAL_WEIGHT } = await import('../src/boards.js');
+  assert.ok(HOT_GLOBAL_WEIGHT > 0.5, '전체 기준 반응이 더 큰 몫');
+  const now = Date.now();
+  const at = new Date(now - 3600e3).toISOString();
+  const p = (id, source, likes, views) => ({ id, source, likes, views, postedAt: at, firstSeenAt: at });
+  const posts = [
+    p('blind:a', 'blind', 5, 98), p('blind:b', 'blind', 2, 74), p('blind:c', 'blind', 1, 60),
+    p('humoruniv:1', 'humoruniv', 777, 46881), p('humoruniv:2', 'humoruniv', 391, 27673), p('humoruniv:3', 'humoruniv', 120, 9000),
+    p('dogdrip:1', 'dogdrip', 191, null), p('dogdrip:2', 'dogdrip', 60, null),
+  ];
+  const s = hotScores(posts, now);
+  const order = [...posts].sort((x, y) => s.get(y.id) - s.get(x.id)).map((x) => x.id);
+  assert.ok(order.indexOf('blind:a') > order.indexOf('humoruniv:2'), `블라인드 1등이 웃대 2등보다 아래: ${order.join(' ')}`);
+  assert.ok(order.indexOf('blind:a') > order.indexOf('dogdrip:1'), '조회수 없는 개드립 인기글(추천끼리 비교)보다도 아래');
+  assert.ok(order.indexOf('blind:a') < order.indexOf('blind:c'), '같은 사이트 안에서는 여전히 반응 순');
+  // 시간 감쇠는 그대로: 같은 글이 오래되면 점수가 준다
+  const old = hotScores([{ ...posts[3], postedAt: new Date(now - 72 * 3600e3).toISOString() }, ...posts.slice(4)], now);
+  assert.ok(old.get('humoruniv:1') < s.get('humoruniv:1'));
+});

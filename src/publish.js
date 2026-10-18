@@ -109,7 +109,7 @@ const MIXED_BOARDS = ['story', 'pick', 'all'];
 /**
  * Worker 로 올릴 공개 글 목록. 각 글의 boards 는 로컬 목록 API(boardPosts)와 정확히 같은 결과다.
  * 인기순 점수는 로컬 인기순(sortPosts 'hot')과 같은 식이다.
- * - hot: 출처별 게시판(그 출처의 공개 글)·므흣 게시판 목록 안에서 센 점수
+ * - hot: 출처별 게시판(그 출처의 공개 글)·므흣 게시판 목록 안에서 각각 센 점수
  * - hotIn: { story, pick, all } 중 이 글이 나오는 게시판마다 그 게시판 목록 안에서 센 점수 (Worker 는 있으면 이것을 쓴다)
  * 시간 감쇠는 모든 글에 같은 비율로 곱해지므로 만든 시각이 달라도 순서는 로컬과 같다.
  */
@@ -120,8 +120,13 @@ export async function buildSnapshot(all = store.allPosts(), now = Date.now()) {
   const member = Object.fromEntries(MIXED_BOARDS.map((b) => [b, ids(lists[b])]));
   const hotIn = Object.fromEntries(MIXED_BOARDS.map((b) => [b, hotScores(lists[b], now)]));
   const bySource = new Map();
-  for (const sid of new Set(pub.map((p) => p.source))) bySource.set(sid, ids(boardPosts(sid, {}, all)));
-  const hot = new Map([...hotScores(adult, now), ...hotScores(pub, now)]);
+  // 출처별 게시판의 인기순은 그 출처 목록 안에서 센다 (전체 기준 반응도 섞으므로 목록이 달라지면 순서가 달라진다 — 로컬 목록 API 와 같게)
+  const hot = new Map(hotScores(adult, now));
+  for (const sid of new Set(pub.map((p) => p.source))) {
+    const list = boardPosts(sid, {}, all);
+    bySource.set(sid, ids(list));
+    for (const [id, v] of hotScores(list, now)) hot.set(id, v);
+  }
   const groups = groupIndex(all);
 
   const posts = [...pub, ...adult].map((p) => ({

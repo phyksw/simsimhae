@@ -97,32 +97,42 @@ export function alsoOnOf(p, groups) {
 export const ts = (p) => new Date(p.postedAt || p.firstSeenAt).getTime() || 0;
 
 /**
- * 인기순 점수: 같은 출처 안에서의 반응 순위(백분위)에 시간 감쇠를 곱한다. 클수록 위.
- * 백분위는 넘겨준 글 목록 안에서 출처별로 센다.
+ * 인기순에서 "전체 기준 반응"의 몫 (나머지는 같은 출처 안 순위).
+ * 출처 안 순위만 보면 블라인드(조회 중앙값 100 남짓·추천 2)의 추천 5짜리가 웃대 추천 700짜리와 같은 점수가 돼서 위로 올라온다.
+ * 2026-10-19 공개 글로 비교: 0 이면 그런 글이 핸드드립·푸어오버 6~9위, 0.7 이면 41~46위(중간쯤)이고 상위 10개는 여전히 여러 출처가 섞인다.
+ */
+export const HOT_GLOBAL_WEIGHT = 0.7;
+
+/**
+ * 인기순 점수: (같은 출처 안 반응 순위 × 0.3 + 목록 전체에서의 반응 순위 × 0.7)에 시간 감쇠(36시간)를 곱한다. 클수록 위.
+ * - 같은 출처 안 순위: 추천 → 댓글 → 조회 순으로 있는 값 (출처마다 숫자 크기가 달라 출처 안에서만 비교)
+ * - 전체 순위: 본 사람 수에 가까운 조회수, 조회수가 없는 출처(개드립)는 추천수끼리
+ * 백분위는 모두 넘겨준 글 목록 안에서 센다 (공개 사이트 스냅샷도 같은 함수).
  * @returns {Map<string, number>} id → 점수
  */
 export function hotScores(posts, now = Date.now()) {
-  const bySrc = new Map();
   const metric = (p) => p.likes ?? p.commentCount ?? p.views ?? null;
+  const sorted = (xs) => xs.filter((v) => v != null).sort((a, b) => a - b);
+  const pctIn = (vals, v) => {
+    if (v == null || !vals.length) return 0.3;
+    let lo = 0;
+    while (lo < vals.length && vals[lo] < v) lo++;
+    return vals.length > 1 ? lo / (vals.length - 1) : 0.5;
+  };
+  const bySrc = new Map();
   for (const p of posts) {
     if (!bySrc.has(p.source)) bySrc.set(p.source, []);
-    bySrc.get(p.source).push(p);
+    bySrc.get(p.source).push(metric(p));
   }
-  const pct = new Map();
-  for (const arr of bySrc.values()) {
-    const vals = arr.map(metric).filter((v) => v != null).sort((a, b) => a - b);
-    for (const p of arr) {
-      const v = metric(p);
-      if (v == null || !vals.length) pct.set(p.id, 0.3);
-      else {
-        let lo = 0;
-        while (lo < vals.length && vals[lo] < v) lo++;
-        pct.set(p.id, vals.length > 1 ? lo / (vals.length - 1) : 0.5);
-      }
-    }
-  }
+  for (const [k, vals] of bySrc) bySrc.set(k, sorted(vals));
+  const views = sorted(posts.map((p) => p.views));
+  const likes = sorted(posts.map((p) => p.likes));
+  const globalPct = (p) => (p.views != null ? pctIn(views, p.views) : p.likes != null ? pctIn(likes, p.likes) : 0.3);
   const out = new Map();
-  for (const p of posts) out.set(p.id, pct.get(p.id) * Math.exp(-Math.max(0, now - ts(p)) / (36 * 3600e3)));
+  for (const p of posts) {
+    const s = (1 - HOT_GLOBAL_WEIGHT) * pctIn(bySrc.get(p.source), metric(p)) + HOT_GLOBAL_WEIGHT * globalPct(p);
+    out.set(p.id, s * Math.exp(-Math.max(0, now - ts(p)) / (36 * 3600e3)));
+  }
   return out;
 }
 
