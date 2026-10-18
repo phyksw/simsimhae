@@ -1,4 +1,5 @@
-// 블라인드(www.teamblind.com/kr) — 토픽 "유우머"(1쪽) + "회사생활"(2쪽) 최신글.
+// 블라인드(www.teamblind.com/kr) — 토픽 "유우머" 최신글.
+// "회사생활"도 받았었지만 판정 118개 중 95개가 유머 아님(하소연·질문·광고), 핸드드립 1개뿐이라 뺐다 (2026-10-19).
 //
 // 사이트 구조 (2026-10 조사):
 // - Nuxt 2 서버 렌더링. 토픽 페이지(/kr/topics/<토픽이름>) HTML 에 최신글 45개(+ 맨 위 NOW/HOT 고정글, 쿠팡 광고 칸)가
@@ -6,7 +7,7 @@
 // - 더 보기(무한 스크롤)와 "추천순" 정렬은 POST /kr/api/article/list 로 가져오는데, 요청·응답 본문을
 //   클라이언트 JS 가 AES+RSA 로 암호화한다({payload, client_zl}). 이건 사이트가 일부러 걸어 둔 자동 수집 방지 장치라서
 //   흉내 내지 않는다(평문 JSON 으로 보내면 30초 뒤 504). 서버 렌더링 HTML 은 쿼리(?page= 등)를 무시하고 늘 첫 45개만 준다.
-//   → 그래서 "페이지" 대신 토픽을 바꿔 가며 읽는다: list(1)=유우머, list(2)=회사생활, list(3~)=빈 배열.
+//   → 그래서 "페이지" 대신 토픽을 바꿔 가며 읽는다: list(1)=유우머, list(2~)=빈 배열 (토픽을 더하려면 TOPICS 에).
 //   유우머는 하루 1~2개꼴로 올라와 첫 45개가 3~4주치이므로 1쪽만으로 새 글을 놓치지 않는다.
 // - robots.txt: `User-agent: *` 는 /search/, /kr/search/, /user/history, /kr/user/history 만 금지(토픽·글·API 경로는 허용).
 //   GPTBot·CCBot·ClaudeBot·anthropic-ai·Google-Extended 같은 AI 크롤러 이름은 전면 금지인데, 이 수집기는 그 이름을 쓰지 않으므로
@@ -28,7 +29,7 @@ import { fetchHtml } from '../lib/http.js';
 import { absUrl, cleanText, parseCount, parseKoDate, normalizeMedia } from '../lib/util.js';
 
 const BASE = 'https://www.teamblind.com';
-const TOPICS = ['유우머', '회사생활']; // list(page) 의 page 번째 토픽
+const TOPICS = ['유우머']; // list(page) 의 page 번째 토픽
 const MAX_COMMENTS = 100;
 // 삭제 댓글은 보통 p.cmt-txt.delete 로 오지만, 클래스가 빠졌을 때를 대비해 자리표시 문구도 거른다
 const DELETED_RE = /^(?:작성자가 삭제한|(?:관리자|운영자)에 의해 (?:삭제|숨김 처리)된|신고(?:로|에 의해) (?:삭제|숨김 처리)된|삭제된)\s*댓글입니다\.?$/;
@@ -289,7 +290,7 @@ function bodyHtml($, pageUrl) {
 
 export default {
   id: 'blind',
-  name: '블라인드 유우머·회사생활',
+  name: '블라인드 유우머',
   short: '블라',
   color: '#da3238', // 블라인드 포인트 빨강(#FB5957)을 흰 글씨가 읽히도록 어둡게 (사이트 CSS 토큰 --tb-legacy-red-da)
   homepage: topicUrl(TOPICS[0]),
@@ -297,7 +298,7 @@ export default {
   // 본문·댓글 첨부 이미지와 링크 미리보기 썸네일: d2u3dcdbebyaiu.cloudfront.net, 배지 등: static.teamblind.com
   imageHosts: ['d2u3dcdbebyaiu.cloudfront.net', 'teamblind.com'],
   referer: `${BASE}/`, // 핫링크 차단은 없지만 사이트 Referer 를 붙여 둔다
-  strictness: 'strict', // 토픽 밖 인기글·회사생활에 젠더·연봉·부동산 얘기가 섞인다
+  strictness: 'strict', // 토픽 밖 인기글(NOW/HOT 고정글)에 젠더·연봉·부동산 얘기가 섞인다
   disabled: false,
   disabledReason: null,
 
