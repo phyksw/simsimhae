@@ -620,8 +620,12 @@ export default {
       normalizeMedia($, $body, url);
       finishMedia($, $body, files);
       html = ($body.html() || '').trim();
-      // 클라우드에서 가끔 본문·댓글이 없는 페이지를 받는다 (PC 에서는 멀쩡함) — 원인을 알 수 있게 받은 페이지의 모양을 남긴다
-      if (!html) console.warn(`[etoland] 본문 없음 ${wrId || ''}: ${text.length}자, RSC ${flight.length}자, article ${a ? '있음' : '없음'}, <title> ${cleanText($('title').first().text()).slice(0, 60)}`);
+    }
+    // 클라우드에서 가끔 본문·댓글이 없는 페이지를 받는다 (PC 에서는 멀쩡함) — 원인을 알 수 있게 받은 페이지의 모양을 남긴다
+    if (!html) {
+      const c = a?.content;
+      const kind = c == null ? '없음' : typeof c !== 'string' ? typeof c : /^\$[0-9a-f]+$/i.test(c) ? `참조 ${c}` : `직접 ${c.length}자`;
+      console.warn(`[etoland] 본문 없음 ${wrId || ''}: 페이지 ${text.length}자, RSC ${flight.length}자, push ${(text.match(/self\.__next_f\.push/g) || []).length}개, article ${a ? '있음' : '없음'}, content ${kind} → ${contentHtml == null ? 'null' : `${contentHtml.length}자`}, <title> ${cleanText($('title').first().text()).slice(0, 40)}`);
     }
 
     // 댓글: RSC 우선, 못 찾으면 DOM. 실패해도 본문은 돌려준다.
