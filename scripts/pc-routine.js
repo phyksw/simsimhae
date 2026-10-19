@@ -625,7 +625,7 @@ export function styleCriteria({ styleFile = path.join(ROOT, 'src/model/STYLE.md'
  * @returns {{storyFunny: number, storyVibe: number, pickFunny: number}}
  */
 export function boardThresholds(boardsFile = path.join(ROOT, 'src/boards.js')) {
-  const out = { storyFunny: 55, storyVibe: 70, pickFunny: 65 };
+  const out = { storyFunny: 55, storyVibe: 65, pickFunny: 65 };
   try {
     const t = readFileSync(boardsFile, 'utf8');
     const num = (name) => {
@@ -750,7 +750,7 @@ export function instructionsText({ batchName, verdictName, vibe = false, criteri
     L.push(
       `이 batch 의 글은 이미 ${c('verdict: "ok"')} 판정을 받았다 (항목의 ${c('ai')}). ${c('vibe')} 만 매긴다:`,
       '',
-      `- ${c('vibe')} (0~100): 위 점수표 그대로. 탈락 조건에 하나라도 걸리면 0~49, 애매하면 69 이하.`,
+      `- ${c('vibe')} (0~100): 위 점수표 그대로. 탈락 조건에 하나라도 걸리면 0~49, 애매하면 64 이하 (핸드드립 기준 65 를 넘기지 않게).`,
       `- **핸드드립** 게시판에는 shortsScore ${th.storyFunny} 이상 + vibe ${th.storyVibe} 이상인 글이 들어간다. 기준에 맞는 글은 아끼지 말고 ${th.storyVibe} 이상을 주고, 탈락 조건에 걸리는 글은 절대 넘기지 않는다.`,
       '',
     );
@@ -766,7 +766,7 @@ export function instructionsText({ batchName, verdictName, vibe = false, criteri
       `- 탈락 조건 중 종류로 나뉘지 않는 것(외모 평가, 비하 없는 남녀·세대 비교, 연애·결혼 갈등, 돈 다툼, 분노·하소연·욕설, 참교육·사이다·복수)은 웃기려고 쓴 글이면 ${c('verdict: "ok"')} 로 두고 ${c('shortsScore')} 40 이하, ${c('vibe')} 0~49.`,
       `- ${c('shortsScore')} (0~100, "그냥 웃긴" 정도): 85~100 제목만 봐도 웃기고 말로 풀기 딱 좋음 · 65~84 웃길 가능성이 높음 · 40~64 약하거나 영상·움짤 위주 · 0~39 웃음 포인트가 거의 없음.`,
       '  "신기한 이유"로 끝나는 잡학은 신기한 정도를 웃긴 정도로 쳐서 매긴다(가볍게 신기하면 55~70). 탈락 조건에 걸리면 40 이하.',
-      `- ${c('vibe')} (0~100): 위 점수표 그대로. 애매하면 69 이하.`,
+      `- ${c('vibe')} (0~100): 위 점수표 그대로. 애매하면 64 이하 (핸드드립 기준 65 를 넘기지 않게).`,
       `- ${c('verdict')} 가 ${c('ok')} 가 아니면 ${c('shortsScore')}·${c('vibe')} 는 0.`,
       `- 게시판: **핸드드립** = ok + shortsScore ${th.storyFunny} 이상 + vibe ${th.storyVibe} 이상, **푸어오버** = ok + shortsScore ${th.pickFunny} 이상.`,
       '  기준에 맞는 글은 아끼지 말고 통과 점수를 주고, 탈락 조건에 걸리는 글은 절대 넘기지 않는다.',

@@ -34,8 +34,8 @@ export function vibeOf(p) {
   if (p.manualVibe === false) return 0;
   return typeof p.ai?.vibe === 'number' ? p.ai.vibe : vibeGuess(p);
 }
-/** 핸드드립(story): 읽어주며 반응하기 좋은 웃긴 글 */
-export const STORY_VIBE_MIN = 70;
+/** 핸드드립(story): 읽어주며 반응하기 좋은 웃긴 글. 분위기 기준 70 → 65 (2026-10-19 운영자 요청: 판정 2,051개 중 후보 135 → 171) */
+export const STORY_VIBE_MIN = 65;
 const STORY_FUNNY_MIN = 55;
 export function storyWorthy(p) {
   if (p.manualVibe === true) return true;

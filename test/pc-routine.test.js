@@ -699,9 +699,9 @@ test('scripts/pc-routine.js: collect → queue → apply → status 왕복 (요�
   assert.ok(alogs.some((s) => s.startsWith('판정 파일에 없는 글 22개')), alogs.join('\n'));
   assert.ok(alogs.some((s) => s.startsWith(`  뺌: ${top[2]} — verdict 값 오류`)));
   assert.ok(alogs.includes('  뺌: dogdrip:none — batch 에 없는 글'), alogs.join('\n'));
-  // 보고용: 핸드드립 조건(ok + 웃김 55↑ + 분위기 70↑)에 드는 글 (src/boards.js 기준 점수)
+  // 보고용: 핸드드립 조건(ok + 웃김 55↑ + 분위기 65↑)에 드는 글 (src/boards.js 기준 점수)
   assert.deepEqual(ar.story, [top[0]]);
-  assert.ok(alogs.includes(`핸드드립 조건(ok + shortsScore 55 이상 + vibe 70 이상)에 드는 글 1개: ${batch.items[0].title}`), alogs.join('\n'));
+  assert.ok(alogs.includes(`핸드드립 조건(ok + shortsScore 55 이상 + vibe 65 이상)에 드는 글 1개: ${batch.items[0].title}`), alogs.join('\n'));
   assert.ok(!alogs.join('\n').includes(ENV.ADMIN_PASSWORD));
   const state = JSON.parse(readFileSync(path.join(dir, 'state.json'), 'utf8'));
   assert.equal(state.applied, 2);
@@ -711,7 +711,7 @@ test('scripts/pc-routine.js: collect → queue → apply → status 왕복 (요�
   assert.ok(state.appliedFiles['verdicts-20261017-153012.json'], '올린 판정 파일을 기억한다');
   assert.deepEqual(routine.unappliedVerdicts(dir), []);
   const story = await call(d, '/api/posts?board=story&size=100');
-  assert.deepEqual(story.json.items.map((p) => p.id), [top[0]], '정상 + 웃김 55↑ + 분위기 70↑ 은 핸드드립으로');
+  assert.deepEqual(story.json.items.map((p) => p.id), [top[0]], '정상 + 웃김 55↑ + 분위기 65↑ 은 핸드드립으로');
 
   // status
   const st = await routine.status({ origin: ORIGIN, password: ENV.ADMIN_PASSWORD, dir, fetch: f });

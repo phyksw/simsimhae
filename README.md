@@ -101,7 +101,7 @@ node scripts/pc-routine.js status    # 대기 수·최근 판정 시각·올리�
     막힌 출처(`dogdrip`·`todayhumor`·`ppomppu`) 것은 미리보기로 사이트에도 올려(collect 와 같은 크기·개수 제한) 방문자 미리보기와 다음 queue 가 그대로 씁니다.
     올린 본문의 검사로 걸러진 글은 batch 에서 빠지고, 올리기가 실패해도 batch 는 만듭니다. 못 읽은 글은 항목의 `readError` 에 까닭이 남습니다.
   - **옛 판정 다시 보기** `--revisit [N]` (기본은 하지 않음, N 기본 30, `prepare` 에도 붙일 수 있음): 판정 기준이 바뀌기 전(잡학 = 유머 아님 등)에 판정된 글 중
-    `not_humor` 이거나 정상인데 분위기 점수가 70 아래인 글을, 점수 모델의 분위기 점수 높은 순으로 N개 batch 뒤에 넣습니다 (`GET /api/admin/review-queue?revisit=1`).
+    `not_humor` 이거나 정상인데 분위기 점수가 핸드드립 기준(65) 아래인 글을, 점수 모델의 분위기 점수 높은 순으로 N개 batch 뒤에 넣습니다 (`GET /api/admin/review-queue?revisit=1`).
     관리자가 상태나 핸드드립 넣기/빼기를 정한 글, 키워드·본문 판정이 차단·므흣인 글, 금지 소재 상한(`src/model/rules.js`)에 걸린 글, 사본은 빼고,
     항목마다 옛 판정(`previousVerdict`)을 붙입니다. INSTRUCTIONS.md 는 "다시 보기 항목은 새 기준으로 처음부터" 판정하라고 적습니다.
   - 판정 기준 표시: 판정을 올리면(`/api/admin/verdicts`, 사이트의 Claude 검수도) `ai.criteria` 에 지금 기준 표시(`src/criteria.js` 의 `CRITERIA_VERSION`, 지금 `style-2026-10`)가 남습니다.
