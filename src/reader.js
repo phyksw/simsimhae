@@ -35,7 +35,14 @@ function remember(id, entry) {
   if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
 }
 
-/** 아직 유효한 캐시 (메모리 → 저장소 순) */
+/**
+ * 본문 글자·그림·댓글이 하나도 없는 미리보기: 사이트가 이 서버에 본문 없는 페이지를 준 것이다
+ * (예: 이토랜드가 클라우드 요청에 가끔 본문·댓글이 빠진 페이지를 준다 — 같은 글을 PC 에서 읽으면 멀쩡하다).
+ * 이런 결과는 저장하지 않고 실패로 돌려, 방문자에게는 빈 화면 대신 원문 링크를 보여 주고 다음에 다시 읽는다.
+ */
+export const isEmptyRead = (d) => !d || (!String(d.text || '').trim() && !(d.mediaCount > 0) && !(d.comments?.length > 0));
+
+/** 아직 유효한 캐시 (메모리 → 저장소 순). 예전에 저장된 빈 미리보기는 없는 셈 친다 */
 function cachedEntry(id) {
   let hit = cache.get(id);
   if (!hit && persist) {
@@ -45,6 +52,10 @@ function cachedEntry(id) {
       console.warn(`[reader] 캐시 읽기 실패: ${e.message}`);
     }
     if (hit) remember(id, hit);
+  }
+  if (hit && isEmptyRead(hit.data)) {
+    cache.delete(id);
+    return null;
   }
   return hit && Date.now() - hit.at < ttlMs ? hit : null;
 }
@@ -206,6 +217,13 @@ export async function readPost(post) {
     const html = cleanHtml(article.html || '', src);
     const text = htmlToText(html);
     const mediaCount = (html.match(/<(img|video|iframe)\b/g) || []).length;
+    const comments = cleanComments(article.comments, src);
+    if (isEmptyRead({ text, mediaCount, comments })) {
+      // 저장하지 않고, 본문 검사(bodyChecked)도 하지 않는다 — 다음 읽기에서 진짜 본문으로 다시
+      const e = new Error('본문이 비어 있어요');
+      e.empty = true;
+      throw e;
+    }
 
     // 본문까지 포함해 다시 판정 — 더 엄격한 결과가 나오면 반영.
     // 본문은 제목보다 기준이 높고(filter.js classify 의 opts.body), 본문에서 나온 사유에만 classify 가 "본문 " 을 붙여 준다.
@@ -227,7 +245,6 @@ export async function readPost(post) {
       store.upsertPost(live);
     }
 
-    const comments = cleanComments(article.comments, src);
     const commentTotal = Number.isFinite(article.commentTotal) ? article.commentTotal : post.commentCount ?? null;
     const data = { title: article.title || post.title, html, text, mediaCount, statusChanged, comments, commentTotal };
     const at = Date.now();

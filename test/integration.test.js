@@ -103,6 +103,37 @@ test('통합: 본문 판정(reader) → 제목 변경(crawler) → 다시 보기
   assert.equal(store.getPost(id).status, 'blocked');
 });
 
+test('통합: 사이트가 본문·그림·댓글 없는 빈 페이지를 주면 미리보기를 저장하지 않고 실패로 (예전에 저장된 빈 미리보기도 다시 읽는다)', async () => {
+  const url = 'https://example.invalid/h/empty';
+  const id = 'humoruniv:77';
+  globalThis.__itItems.push({ postId: '77', title: '빈 페이지 시험 글', url });
+  await crawler.crawlAll();
+  globalThis.__itArticles[url] = { html: '<div class="view-content"> </div>', comments: [] };
+  await assert.rejects(reader.readPost(store.getPost(id)), (e) => e.empty === true && /본문이 비어/.test(e.message));
+  assert.equal(reader.hasCached(id), false, '빈 결과는 저장하지 않는다');
+  assert.ok(!store.getPost(id).bodyChecked, '빈 본문으로 본문 검사를 끝낸 셈 치지 않는다');
+
+  // 다음에 진짜 본문을 받으면 정상
+  globalThis.__itArticles[url] = { html: '<p><img src="https://example.invalid/a.jpg"></p>', comments: [] };
+  const ok = await reader.readPost(store.getPost(id));
+  assert.equal(ok.mediaCount, 1);
+  assert.equal(reader.hasCached(id), true);
+  // 글자 없이 댓글만 있어도 빈 페이지는 아니다
+  assert.equal(reader.isEmptyRead({ text: '', mediaCount: 0, comments: [{ text: 'ㅋㅋ' }] }), false);
+
+  // 예전 코드가 저장해 둔 빈 미리보기: 저장소에 있어도 없는 셈 치고 다시 읽는다
+  const saved = new Map([[id, { at: Date.now(), data: { title: '', html: '', text: '', mediaCount: 0, comments: [] } }]]);
+  reader.setReadCache({ get: (k) => saved.get(k) || null, set: (k, at, data) => saved.set(k, { at, data }), delete: (k) => saved.delete(k), clear: () => saved.clear() });
+  try {
+    assert.equal(reader.hasCached(id), false, '저장된 빈 미리보기는 캐시로 치지 않는다');
+    const again = await reader.readPost(store.getPost(id));
+    assert.equal(again.mediaCount, 1, '원문을 다시 읽었다');
+    assert.equal(saved.get(id).data.mediaCount, 1, '새 결과로 덮어썼다');
+  } finally {
+    reader.setReadCache(null);
+  }
+});
+
 test('통합: 글 페이지의 후방 표시는 글에 남아, 본문 없는 재판정(server rejudgeAll 방식)·재수집에도 므흣이 유지된다', async () => {
   const url = 'https://example.invalid/h/2';
   const id = 'humoruniv:2';
