@@ -34,6 +34,11 @@ export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 export const DEFAULT_SITE = 'https://simsimhae.palebluedot13.workers.dev';
 /** Cloudflare 에서 403 이라 이 PC 가 대신 받는 출처 */
 export const PC_SOURCES = ['dogdrip', 'todayhumor', 'ppomppu'];
+/**
+ * 이 PC 가 읽은 본문을 미리보기로 사이트에 올려 주는 출처: 목록까지 막힌 곳(PC_SOURCES) + 목록은 되지만 글 페이지가 자주 막히는 곳.
+ * 이토랜드는 클라우드 요청에 글 대신 18,106자짜리 막힘 페이지를 자주 준다 (2026-10-20 Worker 로그: RSC·제목 없음). 목록 수집은 클라우드가 그대로 한다.
+ */
+export const PREVIEW_SOURCES = [...PC_SOURCES, 'etoland'];
 /** 미리보기는 한 번에 최대 이만큼 (클라우드의 받아 넣기 한도와 같다) */
 export const PREVIEWS_MAX = 20;
 /** 받아 넣기 요청 하나의 본문 크기 (클라우드·로컬 서버의 본문 상한 64KB 보다 작게) */
@@ -845,7 +850,7 @@ export function instructionsText({ batchName, verdictName, vibe = false, criteri
 }
 
 /**
- * 본문이 없는 batch 항목을 이 PC 에서 직접 읽어 채우고(readDirect), 막힌 출처(PC_SOURCES) 것은 미리보기로 사이트에도 올린다
+ * 본문이 없는 batch 항목을 이 PC 에서 직접 읽어 채우고(readDirect), 막힌 출처(PREVIEW_SOURCES) 것은 미리보기로 사이트에도 올린다
  * (사이트의 미리보기 API·다음 대기열이 그대로 쓴다. 크기·개수 제한은 collect 와 같다). 올리기가 실패해도 batch 는 그대로 만든다.
  * 고친 항목: read(from: 'direct') 를 붙이고 readError 를 지운다. 못 읽은 항목은 readError 에 까닭을 적는다.
  * @returns {Promise<{wanted: number, read: number, failed: number, left: number, uploaded: number, blocked: string[], ms: number}>}
@@ -876,7 +881,7 @@ async function fillReads(items, { session, srcById, scope, budgetMs, perSource, 
     const per = Object.entries(bySrc).map(([id, s]) => `${id} ${s.got}/${s.of}`).join(', ');
     log(`본문 직접 읽기: ${out.read}/${out.wanted}개 (${per})${out.failed ? `, 실패 ${out.failed}개` : ''}${out.left ? `, 시간 예산(${Math.round(Math.min(budgetMs, TIMER_MAX_MS) / 1000)}초)이 지나 ${out.left}개는 본문 없이` : ''}`);
   }
-  for (const srcId of PC_SOURCES) {
+  for (const srcId of PREVIEW_SOURCES) {
     const mine = need.filter((it) => it.source === srcId);
     const reads = mine.filter((it) => r.got.has(it.id)).map((it) => slimRead(it.id, r.got.get(it.id)));
     const failedIds = mine.filter((it) => r.failed.has(it.id)).map((it) => it.id);

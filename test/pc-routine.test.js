@@ -1687,3 +1687,9 @@ test('로컬 express: 받아 넣기 → queue → (명령줄) apply·status 왕�
     srv.stop();
   }
 });
+
+test('미리보기를 이 PC 가 올려 주는 출처: 목록까지 막힌 3곳 + 글 페이지가 자주 막히는 이토랜드 (이토랜드 목록은 클라우드가 계속 수집)', () => {
+  for (const id of routine.PC_SOURCES) assert.ok(routine.PREVIEW_SOURCES.includes(id), id);
+  assert.ok(routine.PREVIEW_SOURCES.includes('etoland'));
+  assert.ok(!routine.PC_SOURCES.includes('etoland'), '이토랜드 목록은 PC 수집 대상이 아니다 (클라우드가 건너뛰지 않게)');
+});
