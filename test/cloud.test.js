@@ -201,7 +201,7 @@ test('처음 켜면 빈 상태: /api/meta 는 mode "cloud", 로컬 전용 필드
   assert.match(r.headers.get('content-type'), /application\/json/);
   assert.equal(r.json.mode, 'cloud');
   assert.equal(r.json.admin, false);
-  assert.deepEqual(r.json.boardCounts, { story: 0, pick: 0, all: 0 });
+  assert.deepEqual(r.json.boardCounts, { story: 0, pick: 0, all: 0, sub: 0, stream: 0 });
   assert.deepEqual(r.json.live, { live: false, lastCrawlAt: null });
   assert.deepEqual(r.json.sources.map((s) => s.id), ['humoruniv', 'dogdrip'], '수집을 끈 출처는 글이 없으면 숨김');
   const cookie = await login(d);
@@ -463,6 +463,27 @@ test('알람 때 핸드드립 → 푸어오버 글의 미리보기를 몇 개만
   // 미리 준비한 글은 원문에 가지 않고 바로 열린다
   assert.equal((await call(d, `/api/posts/${encodeURIComponent('humoruniv:11')}/read`)).status, 200);
   assert.deepEqual(globalThis.__cl.readCalls, []);
+});
+
+test('주제 탭에만 나오는 글(유머 아님 정보 글)도 미리보기를 미리 준비한다', async () => {
+  globalThis.__cl.items = { humoruniv: [item('21', '신작 게임 출시 소식')] };
+  globalThis.__cl.articles = { 'https://example.invalid/21': { html: '<p>신작 게임 본문</p>' } };
+  const storage = fakeStorage();
+  let d = await boot(storage); // 미리 준비 끔
+  const cookie = await login(d);
+  await call(d, '/api/admin/crawl', { body: {}, cookie });
+  await quiet(() => d.alarm());
+  const v = await call(d, '/api/admin/verdicts', { cookie, body: { model: 't', items: [{ id: 'humoruniv:21', verdict: 'not_humor', shortsScore: 0, vibe: 0, reason: '게임 소식', topics: ['sub'] }] } });
+  assert.equal(v.json.applied, 1);
+  assert.deepEqual(ids(await call(d, '/api/posts?board=sub')), ['humoruniv:21']);
+  assert.equal((await call(d, '/api/posts?board=pick')).json.total, 0, '핸드드립·푸어오버에는 없는 글');
+
+  d = await boot(storage, { ...ENV, PREFETCH_PER_RUN: '2' });
+  globalThis.__cl.readCalls = [];
+  await call(d, '/api/admin/crawl', { body: {}, cookie });
+  await quiet(() => d.alarm());
+  assert.deepEqual(globalThis.__cl.readCalls, ['https://example.invalid/21']);
+  assert.equal(storage.count('reads'), 1);
 });
 
 test('관리자 동작(게시하기·후보함·금지어·검수 결과)이 DO 저장소에 남는다', async () => {

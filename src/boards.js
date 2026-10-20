@@ -4,6 +4,7 @@ import { isPending, isPublic, groupKey, onePerGroup } from './store.js';
 import { vibeGuess } from './filter.js';
 import { ruleCaps } from './model/score.js';
 import { CRITERIA_VERSION } from './criteria.js';
+import { TOPIC_IDS, topicsOf } from './topics.js';
 
 /**
  * 핸드드립(story)·푸어오버(pick) 게시판에 남겨 두는 글 수: 기간 제한 없이, 조건에 맞는 글 중 가장 최근에 들어온 N개.
@@ -45,6 +46,18 @@ export function storyWorthy(p) {
 }
 
 /**
+ * 주제 게시판(서브컬처·방송)에 보여도 되는 글: 공개 글, 그리고 Claude 가 "유머 아님"으로 판정했지만 그 주제의 정보 글
+ * (신작 소식·게임 추천·방송 소식 같은 글 — 주제 탭은 웃긴 글만이 아니라 그 주제 이야기·정보를 모은다).
+ * 키워드·본문 판정으로 걸러진 글, 정치·혐오·사건사고·그라운즈 판정, 관리자가 숨긴 글, Claude 검수 대기 글은 빼고.
+ */
+export function topicVisible(p) {
+  if (!p || isPending(p)) return false;
+  if (p.manual) return p.manual === 'ok';
+  if (p.status === 'ok') return true;
+  return p.status === 'blocked' && p.ai?.verdict === 'not_humor' && (p.auto?.status || 'ok') === 'ok';
+}
+
+/**
  * 게시판의 글 목록 (검색·정렬 전). /api/posts 의 total, /api/meta 의 boardCounts·sources[].count,
  * 공개 사이트 스냅샷의 boards 가 모두 이 함수로 센다.
  * - 전체·픽·므흣: 중복 묶음마다 하나만. 대표 글이 보이면 대표 글이, 대표 글이 안 보이면(차단·대기·므흣) 보이는 사본이 대신 나온다.
@@ -59,6 +72,9 @@ export function boardPosts(board, { admin = false, adult = false, stage = '' } =
       return newestKept(onePerGroup(all.filter(isPublic)).filter(pickWorthy));
     case 'story':
       return newestKept(onePerGroup(all.filter(isPublic)).filter(storyWorthy));
+    case 'sub':
+    case 'stream':
+      return newestKept(onePerGroup(all.filter((p) => topicVisible(p) && topicsOf(p).includes(board))));
     case 'adult':
       return adult ? onePerGroup(all.filter((p) => p.status === 'adult' && !isPending(p))) : null;
     case 'filtered':
@@ -78,9 +94,9 @@ function newestKept(posts) {
     .slice(0, BOARD_KEEP);
 }
 
-/** 핸드드립·푸어오버 게시판에 남아 있는 글 id (보관 기간이 지나도 지우지 않을 글) */
+/** 핸드드립·푸어오버·주제 게시판에 남아 있는 글 id (보관 기간이 지나도 지우지 않을 글) */
 export function keptBoardIds(all = store.allPosts()) {
-  return new Set([...boardPosts('story', {}, all), ...boardPosts('pick', {}, all)].map((p) => p.id));
+  return new Set(['story', 'pick', ...TOPIC_IDS].flatMap((b) => boardPosts(b, {}, all)).map((p) => p.id));
 }
 
 /** 방문자에게 보일 출처인지: 수집 중이거나, 수집을 껐어도 공개 글이 남은 출처 (/api/meta 와 공개 스냅샷이 같은 기준) */

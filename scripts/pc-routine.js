@@ -775,6 +775,12 @@ export function instructionsText({ batchName, verdictName, vibe = false, criteri
       `- ${c('verdict')} 가 ${c('ok')} 가 아니면 ${c('shortsScore')}·${c('vibe')} 는 0.`,
       `- 게시판: **핸드드립** = ok + shortsScore ${th.storyFunny} 이상 + vibe ${th.storyVibe} 이상, **푸어오버** = ok + shortsScore ${th.pickFunny} 이상.`,
       '  기준에 맞는 글은 아끼지 말고 통과 점수를 주고, 탈락 조건에 걸리는 글은 절대 넘기지 않는다.',
+      `- ${c('topics')} (주제 탭 — 해당할 때만, 없으면 칸을 뺀다): 그 주제 이야기가 글의 중심일 때 붙인다. 웃긴 글이든 정보 글이든 상관없다.`,
+      `  - ${c('sub')} 🎮 서브컬처: 애니메이션·만화·웹툰·게임(모바일·PC·콘솔)·피규어·코스프레·덕질 이야기와 소식 (신작·게임 추천·설정·뒷이야기).`,
+      `  - ${c('stream')} 📺 방송: 버튜버·스트리머·유튜버·인터넷 방송(치지직·숲·트위치·유튜브) 이야기·방송 장면·소식.`,
+      '  - 붙이지 않는다: 그 주제가 곁가지뿐인 글(제목에 게임 단어만 있는 일상 글 등), 불법 번역·스캔 만화 연재("번역) N화"), 사생활 폭로·저격·논란·"○○ 사태"·팬덤 싸움, 엑셀방송·벗방 같은 선정적인 방송 이야기, 성적인 글, 광고·홍보(자작 사이트·앱 소개 포함).',
+      `  - 짧은 개그 만화·4컷(일상 이야기를 그린 만화)은 만화 속 이야기가 게임·애니·덕질일 때만 ${c('sub')} (만화라는 형식만으로는 붙이지 않는다). 웹툰·애니 작품 소식(애니화·연재 근황)은 ${c('sub')}.`,
+      `  - ${c('verdict')} 가 ${c('ok')} 이거나, 웃음은 없지만 그 주제의 정보 글이라 ${c('not_humor')} 일 때만 붙인다 (${c('not_humor')} 여도 주제 탭에는 보인다). ${c('politics')}·${c('hate')}·${c('dark')}·${c('adult')} 면 붙이지 않는다.`,
       '',
     );
   }
@@ -831,7 +837,8 @@ export function instructionsText({ batchName, verdictName, vibe = false, criteri
       '  {"id": "dogdrip:123", "verdict": "ok", "shortsScore": 80, "vibe": 88, "reason": "사투리 대화 반전"},',
       '  {"id": "dogdrip:124", "verdict": "ok", "shortsScore": 62, "vibe": 78, "reason": "지명의 의외의 이유"},',
       '  {"id": "dogdrip:125", "verdict": "ok", "shortsScore": 35, "vibe": 20, "reason": "연애 갈등"},',
-      '  {"id": "dogdrip:126", "verdict": "not_humor", "shortsScore": 0, "vibe": 0, "reason": "재테크 정보"}',
+      '  {"id": "dogdrip:126", "verdict": "not_humor", "shortsScore": 0, "vibe": 0, "reason": "재테크 정보"},',
+      '  {"id": "dogdrip:127", "verdict": "not_humor", "shortsScore": 0, "vibe": 0, "reason": "신작 게임 소식", "topics": ["sub"]}',
       ']}',
       '```',
       '',
@@ -842,6 +849,7 @@ export function instructionsText({ batchName, verdictName, vibe = false, criteri
       `- ${c('verdict')}: ${VERDICTS.map(c).join(' | ')} 중 하나.`,
       `- ${c('shortsScore')}, ${c('vibe')}: 0~100 숫자 (따옴표 없이, 정수). ${c('ok')} 면 둘 다 꼭 넣는다 (없으면 빠진다). ${c('ok')} 가 아니면 0 (다른 값을 써도 0 으로 올라간다).`,
       `- ${c('reason')}: 한국어 15자 이내 문자열 (60자가 넘으면 잘린다).`,
+      `- ${c('topics')}: ${c('["sub"]')}, ${c('["stream"]')}, ${c('["sub", "stream"]')} 처럼 목록 (모르는 값은 버려진다). 주제가 없으면 넣지 않는다.`,
       '- batch 의 글을 모두 넣는다. 빠진 글은 다음 batch 에 다시 나온다.',
     );
   }

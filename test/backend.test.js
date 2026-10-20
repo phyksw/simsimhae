@@ -208,8 +208,8 @@ test('중복 묶음: 대표 글이 안 보이면 공개 사본이 전체 게시�
 
 test('/api/meta boardCounts·sources[].count 는 각 게시판 목록 total 과 같다', async () => {
   const anon = await api('/api/meta');
-  assert.deepEqual(Object.keys(anon.json.boardCounts).sort(), ['all', 'pick', 'story']);
-  for (const b of ['all', 'pick', 'story']) {
+  assert.deepEqual(Object.keys(anon.json.boardCounts).sort(), ['all', 'pick', 'story', 'stream', 'sub']);
+  for (const b of ['all', 'pick', 'story', 'sub', 'stream']) {
     assert.equal(anon.json.boardCounts[b], (await api(`/api/posts?board=${b}`)).json.total, b);
   }
   for (const s of anon.json.sources) {
@@ -219,7 +219,7 @@ test('/api/meta boardCounts·sources[].count 는 각 게시판 목록 total 과 
 
   const adm = await api('/api/meta', { headers: adminH() });
   assert.equal(adm.json.admin, true);
-  assert.deepEqual(Object.keys(adm.json.boardCounts).sort(), ['adult', 'all', 'filtered', 'pick', 'shorts', 'story']);
+  assert.deepEqual(Object.keys(adm.json.boardCounts).sort(), ['adult', 'all', 'filtered', 'pick', 'shorts', 'story', 'stream', 'sub']);
   for (const b of Object.keys(adm.json.boardCounts)) {
     assert.equal(adm.json.boardCounts[b], (await api(`/api/posts?board=${b}`, { headers: adminH() })).json.total, b);
   }

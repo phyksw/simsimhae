@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { adminSession, askHidden, chunkPosts, siteOrigin } from './push-to-cloud.js';
+import { TOPIC_IDS, cleanTopics } from '../src/topics.js';
 
 /** 관리자 요청 본문 상한(64KB)보다 작게 나눠 보낸다 */
 const VERDICT_CHUNK_BYTES = 48 * 1024;
@@ -66,12 +67,18 @@ export function checkVerdicts(data, { requireVibe = false } = {}) {
       rejected.push({ id, why: `vibe 는 0~100 숫자여야 함 (${String(it.vibe).slice(0, 20)})` });
       continue;
     }
+    // 주제 탭(topics): 알려진 주제 id 목록 (src/topics.js). 모르는 값은 버리고, 목록이 아니면 뺀다
+    const topics = it.topics === undefined || it.topics === null ? undefined : cleanTopics(it.topics);
+    if (topics === null) {
+      rejected.push({ id, why: `topics 는 목록이어야 함 (${TOPIC_IDS.join('|')} 중에서)` });
+      continue;
+    }
     if (it.verdict === undefined || it.verdict === null) {
-      // 판정은 그대로 두고 분위기 점수만
-      if (vibe === undefined) rejected.push({ id, why: 'verdict·vibe 둘 다 없음' });
+      // 판정은 그대로 두고 분위기 점수나 주제만
+      if (vibe === undefined && topics === undefined) rejected.push({ id, why: 'verdict·vibe·topics 모두 없음' });
       else {
         seen.add(id);
-        items.push({ id, vibe });
+        items.push({ id, ...(vibe !== undefined ? { vibe } : {}), ...(topics !== undefined ? { topics } : {}) });
       }
       continue;
     }
@@ -100,6 +107,8 @@ export function checkVerdicts(data, { requireVibe = false } = {}) {
     seen.add(id);
     const o = { id, verdict: it.verdict, shortsScore: ok ? shortsScore : 0, reason: String(it.reason ?? '').trim().slice(0, REASON_MAX) };
     if (vibe !== undefined) o.vibe = ok ? vibe : 0;
+    // 주제는 정상·유머 아님 판정에만 의미가 있다 (정보 글은 not_humor 여도 주제 탭에 보인다)
+    if (topics?.length && (ok || it.verdict === 'not_humor')) o.topics = topics;
     items.push(o);
   }
   return { items, rejected, model: String(data?.model || 'claude-code 검수').slice(0, 60) };

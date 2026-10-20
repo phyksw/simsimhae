@@ -65,6 +65,12 @@ const state = {
 };
 
 const STAGES = { candidate: '후보', script: '대본 작성', done: '촬영 완료' };
+/** 주제 게시판 (서버 src/topics.js 의 TOPIC_BOARDS 와 같게) */
+const TOPIC_BOARDS = [
+  { id: 'sub', label: '🎮 서브컬처' },
+  { id: 'stream', label: '📺 방송' },
+];
+const isTopicBoard = (b) => TOPIC_BOARDS.some((t) => t.id === b);
 const VERDICT_LABEL = { ok: '정상', politics: '정치', hate: '혐오', dark: '사건사고', adult: '그라운즈', not_humor: '유머 아님' };
 
 /**
@@ -228,6 +234,8 @@ function boardName(board) {
   if (board === 'story') return '☕ 핸드드립';
   if (board === 'pick') return '😄 푸어오버';
   if (board === 'all') return '전체';
+  const topic = TOPIC_BOARDS.find((t) => t.id === board);
+  if (topic) return topic.label;
   if (board === 'adult') return '🔒 그라운즈';
   if (board === 'shorts') return '🎬 쇼츠 후보함';
   if (board === 'filtered') return '🚫 걸러진 글';
@@ -253,6 +261,8 @@ function renderBoards() {
   nav.replaceChildren(...kids(
     chip('story', '☕ 핸드드립', { count: bc.story }),
     chip('pick', '😄 푸어오버', { count: bc.pick ?? m.pickCount }),
+    // 주제 게시판은 서버가 아는 것만 (옛 서버면 boardCounts 에 없다). 글이 아직 없으면 방문자에게는 숨긴다 (보고 있는 게시판이면 그대로).
+    ...TOPIC_BOARDS.filter((t) => t.id in bc && (bc[t.id] > 0 || m.admin || state.board === t.id)).map((t) => chip(t.id, t.label, { count: bc[t.id] })),
     chip('all', '전체', { count: total }),
     ...m.sources.map((s) => chip(s.id, s.short, { swatch: s.color, count: s.count, title: s.name + (s.active ? '' : ' (수집 꺼짐)'), cls: s.active ? '' : 'inactive' })),
     chip('adult', m.adult ? '🔓 그라운즈' : '🔒 그라운즈', { cls: 'special', title: '비밀번호로 잠긴 게시판', count: m.adult ? bc.adult : null }),
@@ -461,7 +471,7 @@ function emptyMessage() {
       ? '아직 쇼츠 후보가 없어요. 글 옆의 🎬 버튼으로 담아보세요.'
       : state.board === 'filtered'
         ? '걸러진 글이 없어요.'
-        : state.board === 'pick' || state.board === 'story'
+        : state.board === 'pick' || state.board === 'story' || isTopicBoard(state.board)
           ? '아직 글이 없어요.'
           : state.meta?.live?.lastCrawlAt
             ? '아직 글이 없어요.'
@@ -642,6 +652,15 @@ function rowActions(p) {
     wrap.append(p.inStory ? act('☕ 핸드드립에서 빼기', { vibe: false }, 'ghost') : act('☕ 핸드드립으로', { vibe: true }));
     if (p.manualVibe !== null && p.manualVibe !== undefined) wrap.append(act('이야기 자동 판정으로', { vibe: null }, 'ghost'));
   }
+  // 주제 게시판 넣기/빼기 (공개 글, 그리고 Claude 가 유머 아님으로 본 정보 글)
+  if (p.status === 'ok' || p.ai?.verdict === 'not_humor') {
+    const cur = Array.isArray(p.topics) ? p.topics : [];
+    for (const t of TOPIC_BOARDS) {
+      const has = cur.includes(t.id);
+      wrap.append(act(has ? `${t.label}에서 빼기` : `${t.label}에 넣기`, { topics: has ? cur.filter((x) => x !== t.id) : [...cur, t.id] }, has ? 'ghost' : ''));
+    }
+    if (Array.isArray(p.manualTopics)) wrap.append(act('주제 자동 판정으로', { topics: null }, 'ghost'));
+  }
   if (p.shorts) {
     for (const [k, v] of Object.entries(STAGES)) wrap.append(act(v, { shorts: { stage: k } }, p.shorts.stage === k ? 'on' : 'ghost'));
     wrap.append(act('후보 빼기', { shorts: null }, 'ghost'));
@@ -670,6 +689,10 @@ async function adminUpdate(p, patch, rowEl) {
             : patch.vibe === false
               ? '☕ 핸드드립에서 뺐어요'
               : '핸드드립 자동 판정으로 되돌렸어요'
+          : 'topics' in patch
+            ? patch.topics === null
+              ? '주제를 자동 판정으로 되돌렸어요'
+              : '주제를 바꿨어요'
           : patch.shorts === null
             ? '후보에서 뺐어요'
             : `쇼츠 ${STAGES[patch.shorts.stage]}(으)로 표시했어요`;
@@ -684,7 +707,9 @@ async function adminUpdate(p, patch, rowEl) {
             ? !!p.shorts && (!state.stage || p.shorts.stage === state.stage)
             : state.board === 'story'
               ? p.status === 'ok' && !!p.inStory
-              : p.status === 'ok';
+              : isTopicBoard(state.board)
+                ? (p.topics || []).includes(state.board) && (p.status === 'ok' || (p.status === 'blocked' && p.ai?.verdict === 'not_humor' && !p.manual))
+                : p.status === 'ok';
     if (rowEl?.isConnected) {
       if (stillFits) rowEl.replaceWith(renderRow(p));
       else {

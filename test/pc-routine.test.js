@@ -1693,3 +1693,72 @@ test('미리보기를 이 PC 가 올려 주는 출처: 목록까지 막힌 3곳 
   assert.ok(routine.PREVIEW_SOURCES.includes('etoland'));
   assert.ok(!routine.PC_SOURCES.includes('etoland'), '이토랜드 목록은 PC 수집 대상이 아니다 (클라우드가 건너뛰지 않게)');
 });
+
+test('주제 탭(서브컬처·방송): 판정의 topics 로 모이고, 유머 아님 정보 글도 주제 탭에서는 보이고 미리보기가 열린다', async () => {
+  const d = await boot();
+  const cookie = await login(d);
+  globalThis.__pc.items.humoruniv = [
+    item('humoruniv', '901', '신작 게임 출시 소식'),
+    item('humoruniv', '902', '버튜버 방송 웃긴 장면'),
+    item('humoruniv', '903', '평범한 일상 이야기'),
+    item('humoruniv', '904', '게임 회사 정치 논쟁'),
+  ];
+  for (const x of globalThis.__pc.items.humoruniv) globalThis.__pc.articles[x.url] = { html: `<p>${x.title} 본문입니다</p>` };
+  await call(d, '/api/admin/crawl', { body: {}, cookie });
+  await quiet(() => d.alarm());
+  const v = await call(d, '/api/admin/verdicts', {
+    cookie,
+    body: {
+      model: 't',
+      items: [
+        { id: 'humoruniv:901', verdict: 'not_humor', shortsScore: 0, vibe: 0, reason: '신작 소식', topics: ['sub', 'nope'] },
+        { id: 'humoruniv:902', verdict: 'ok', shortsScore: 70, vibe: 60, reason: '방송 장면', topics: ['stream'] },
+        { id: 'humoruniv:903', verdict: 'ok', shortsScore: 50, vibe: 50, reason: '일상' },
+        { id: 'humoruniv:904', verdict: 'politics', shortsScore: 0, vibe: 0, reason: '정치', topics: ['sub'] },
+      ],
+    },
+  });
+  assert.equal(v.status, 200);
+  const list = async (b) => (await call(d, `/api/posts?board=${b}&size=100`)).json.items.map((p) => p.id);
+  assert.deepEqual(await list('sub'), ['humoruniv:901'], '유머 아님이어도 서브컬처 정보 글은 주제 탭에 (정치 판정은 주제가 붙어 있어도 안 보이고, 모르는 주제 값은 버린다)');
+  assert.deepEqual(await list('stream'), ['humoruniv:902']);
+  assert.ok(!(await list('all')).includes('humoruniv:901'), '전체 게시판에는 여전히 안 보인다');
+  // 방문자도 주제 탭의 정보 글 미리보기는 연다. 주제가 붙어도 정치 판정 글은 계속 막힌다
+  assert.equal((await call(d, '/api/posts/humoruniv%3A901/read')).status, 200);
+  assert.equal((await call(d, '/api/posts/humoruniv%3A904/read')).status, 404);
+  const meta = (await call(d, '/api/meta')).json;
+  assert.equal(meta.boardCounts.sub, 1);
+  assert.equal(meta.boardCounts.stream, 1);
+  // 판정은 그대로 두고 주제만 (이미 판정한 글에 붙이기)
+  assert.equal((await call(d, '/api/admin/verdicts', { cookie, body: { items: [{ id: 'humoruniv:903', topics: ['sub'] }] } })).json.applied, 1);
+  assert.deepEqual((await list('sub')).sort(), ['humoruniv:901', 'humoruniv:903']);
+  // 관리자 지정: 빈 목록이면 주제 없음, null 이면 판정대로, 목록이 아니면 400
+  await call(d, '/api/admin/posts/humoruniv%3A903', { cookie, body: { topics: [] } });
+  assert.deepEqual(await list('sub'), ['humoruniv:901']);
+  await call(d, '/api/admin/posts/humoruniv%3A902', { cookie, body: { topics: ['sub', 'stream'] } });
+  assert.ok((await list('sub')).includes('humoruniv:902'));
+  await call(d, '/api/admin/posts/humoruniv%3A903', { cookie, body: { topics: null } });
+  assert.ok((await list('sub')).includes('humoruniv:903'));
+  assert.equal((await call(d, '/api/admin/posts/humoruniv%3A903', { cookie, body: { topics: 'sub' } })).status, 400);
+});
+
+test('판정 파일의 topics: 알려진 주제만(중복·모르는 값 버림), 목록이 아니면 뺌, 주제만 넣는 항목, 정치 판정에는 붙이지 않음', () => {
+  const r = routine.checkVerdicts(
+    {
+      items: [
+        { id: 'a:1', verdict: 'ok', shortsScore: 70, vibe: 70, topics: ['sub', 'x', 'sub'] },
+        { id: 'a:2', verdict: 'politics', shortsScore: 0, vibe: 0, topics: ['stream'] },
+        { id: 'a:3', topics: ['stream'] },
+        { id: 'a:4', verdict: 'ok', shortsScore: 70, vibe: 70, topics: 'sub' },
+        { id: 'a:5', verdict: 'not_humor', shortsScore: 0, vibe: 0, topics: ['sub'] },
+      ],
+    },
+    { requireVibe: true },
+  );
+  const by = (id) => r.items.find((x) => x.id === id);
+  assert.deepEqual(by('a:1').topics, ['sub']);
+  assert.equal(by('a:2').topics, undefined);
+  assert.deepEqual(by('a:3'), { id: 'a:3', topics: ['stream'] });
+  assert.ok(r.rejected.some((x) => x.id === 'a:4' && /topics/.test(x.why)));
+  assert.deepEqual(by('a:5').topics, ['sub']);
+});

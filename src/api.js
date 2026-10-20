@@ -16,7 +16,8 @@ import { CRITERIA_VERSION } from './criteria.js';
 import { readPost, forgetCached } from './reader.js';
 import { getCustomRules, saveCustomRules } from './filter.js';
 import { aiStatus } from './ai.js';
-import { boardPosts, sortPosts, vibeOf, storyWorthy, alsoOnOf, sourceShown, STORY_VIBE_MIN } from './boards.js';
+import { boardPosts, sortPosts, vibeOf, storyWorthy, alsoOnOf, sourceShown, STORY_VIBE_MIN, topicVisible } from './boards.js';
+import { TOPIC_IDS, cleanTopics, topicsOf } from './topics.js';
 import { ruleCaps } from './model/score.js';
 import { rejudgeAll } from './rejudge.js';
 import { applyImport, postList, POST_MAX_CHARS } from './importer.js';
@@ -202,6 +203,8 @@ function serialize(p, { admin, groups }) {
       vibe: vibeOf(p),
       manualVibe: typeof p.manualVibe === 'boolean' ? p.manualVibe : null,
       inStory: storyWorthy(p),
+      topics: topicsOf(p),
+      manualTopics: Array.isArray(p.manualTopics) ? p.manualTopics : null,
     });
   }
   return o;
@@ -311,6 +314,7 @@ export function createApi(host) {
     const count = (board) => boardPosts(board, ctx, posts)?.length ?? 0;
     // 각 게시판 목록(/api/posts)의 total 과 같은 기준. 볼 수 없는 게시판은 넣지 않는다.
     const boardCounts = { story: count('story'), pick: count('pick'), all: count('all') };
+    for (const t of TOPIC_IDS) boardCounts[t] = count(t);
     if (adult) boardCounts.adult = count('adult');
     if (admin) {
       boardCounts.filtered = count('filtered');
@@ -388,7 +392,8 @@ export function createApi(host) {
     if (!p) return res(404, { error: '글을 찾을 수 없어요 (오래되어 정리됐을 수 있어요)' });
     const admin = isAdmin(req);
     if (p.status === 'adult' && !isAdult(req)) return res(403, { error: 'locked' });
-    if ((p.status === 'blocked' || isPending(p)) && !admin) return res(404, { error: '볼 수 없는 글이에요' });
+    // 주제 탭의 정보 글(Claude '유머 아님' 판정이지만 그 주제의 글)은 차단 상태여도 연다 (src/boards.js topicVisible)
+    if ((p.status === 'blocked' || isPending(p)) && !admin && !topicVisible(p)) return res(404, { error: '볼 수 없는 글이에요' });
     let data;
     if (p.pcRead) {
       // PC 가 받아 올려 준 미리보기 (이 서버가 원문을 못 가져오는 출처). 규칙이 바뀌어 본문 검사가 풀렸으면 다시 본다.
@@ -412,7 +417,7 @@ export function createApi(host) {
       changed();
     }
     // 본문 검사로 상태가 바뀌어 이제 볼 수 없게 됐다면 막는다
-    if (!admin && (fresh.status === 'blocked' || (fresh.status === 'adult' && !isAdult(req)))) {
+    if (!admin && ((fresh.status === 'blocked' && !topicVisible(fresh)) || (fresh.status === 'adult' && !isAdult(req)))) {
       return res(409, { error: fresh.status === 'adult' ? '본문을 확인해 보니 그라운즈 게시판 글이라 옮겼어요' : '본문을 확인해 보니 걸러야 할 글이라 숨겼어요', status: fresh.status });
     }
     return ok({ post: serialize(fresh, { admin, groups: groupIndex(store.allPosts()) }), ...data });
@@ -462,6 +467,15 @@ export function createApi(host) {
       if (b.vibe !== null && typeof b.vibe !== 'boolean') return res(400, { error: 'vibe 값 오류' });
       if (b.vibe === null) delete p.manualVibe;
       else p.manualVibe = b.vibe;
+    }
+    // 주제 탭(서브컬처·방송) 지정: 목록이면 그 주제로(빈 목록 = 주제 없음), null 이면 Claude 판정대로
+    if ('topics' in b) {
+      if (b.topics === null) delete p.manualTopics;
+      else {
+        const t = cleanTopics(b.topics);
+        if (!t) return res(400, { error: 'topics 값 오류' });
+        p.manualTopics = t;
+      }
     }
     if ('shorts' in b) {
       if (b.shorts === null) p.shorts = null;
@@ -647,9 +661,12 @@ export function createApi(host) {
     const vibeNum = (v) => (v === undefined || v === null || !Number.isFinite(Number(v)) ? undefined : Math.max(0, Math.min(100, Math.round(Number(v)))));
     for (const it of Array.isArray(req.body?.items) ? req.body.items.slice(0, 2000) : []) {
       const p = store.getPost(String(it?.id || ''));
-      // 판정은 그대로 두고 "썰·대화" 분위기 점수만 넣는 경우
-      if (p && p.ai && it && it.verdict === undefined && vibeNum(it.vibe) !== undefined) {
-        p.ai = { ...p.ai, vibe: vibeNum(it.vibe) };
+      const topics = cleanTopics(it?.topics);
+      // 판정은 그대로 두고 "썰·대화" 분위기 점수나 주제(topics)만 넣는 경우
+      if (p && p.ai && it && it.verdict === undefined && (vibeNum(it.vibe) !== undefined || topics)) {
+        p.ai = { ...p.ai };
+        if (vibeNum(it.vibe) !== undefined) p.ai.vibe = vibeNum(it.vibe);
+        if (topics) p.ai.topics = topics;
         store.upsertPost(p);
         applied++;
         continue;
@@ -660,6 +677,8 @@ export function createApi(host) {
       }
       p.ai = { verdict: it.verdict, shortsScore: Math.max(0, Math.min(100, Math.round(Number(it.shortsScore) || 0))), reason: String(it.reason || '').slice(0, 60), model, at, criteria: CRITERIA_VERSION };
       if (vibeNum(it.vibe) !== undefined) p.ai.vibe = vibeNum(it.vibe);
+      // 주제는 정상·유머 아님 판정에만 (정치·혐오·사건사고·그라운즈 글은 주제 탭에도 안 보인다)
+      if (topics?.length && (it.verdict === 'ok' || it.verdict === 'not_humor')) p.ai.topics = topics;
       p.aiPending = false;
       p.aiTries = 0;
       p.aiNextAt = null;
