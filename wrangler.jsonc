@@ -1,29 +1,21 @@
-// Cloudflare Worker 설정 — 수집·필터링·관리자까지 Cloudflare 에서 도는 사이트 (설계: worker/CLOUD.md, Workers Paid)
-// 비밀은 여기 쓰지 않는다: npx wrangler secret put ADMIN_PASSWORD / ADULT_PASSWORD / SESSION_SECRET (선택: ANTHROPIC_API_KEY)
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "simsimhae",
   "main": "worker/index.js",
-  // 설치된 workerd(1.20261006.x)보다 늦은 날짜는 쓰지 않는다
   "compatibility_date": "2026-10-06",
-  // src/ 의 모듈(cheerio·sanitize-html·iconv-lite·Anthropic SDK·node:crypto 등)이 Workers 에서도 돌게
-  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
-    // /api/* 만 Worker 가 받고, 나머지(화면 파일)는 Worker 를 거치지 않고 바로 나간다
     "run_worker_first": ["/api/*"]
   },
-  // 사이트 상태 전체 (글·설정·금지어·미리보기 캐시) — Durable Object 하나('main'), SQLite 저장소
   "durable_objects": {
-    "bindings": [{ "name": "SITE", "class_name": "SiteDO" }]
+    "bindings": [{ "name": "VOTES", "class_name": "VotesDO" }]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SiteDO"] }],
-  // 5분마다 SiteDO 의 수집 알람이 살아 있는지 확인 (수집 간격 자체는 관리자 화면의 실시간 설정)
-  "triggers": { "crons": ["*/5 * * * *"] },
-  // 요청·알람 하나의 CPU 시간 상한 (ms, 최대 300000) — 수집 한 번(목록 파싱·판정·미리보기 정리)이 넉넉히 들어가게
-  "limits": { "cpu_ms": 300000 },
-  // 대시보드에서 Worker·알람 로그 보기 (컴퓨터가 꺼져 있어도 수집 오류를 확인할 수 있게)
+  // v1 은 예전 사이트의 저장소 클래스(SiteDO) — 데이터를 지우지 않으려고 클래스 이름은 남겨 둔다.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SiteDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["VotesDO"] }
+  ],
   "observability": { "enabled": true }
 }

@@ -1,37 +1,14 @@
 {
-  "name": "humor-curation",
-  "version": "0.1.0",
+  "name": "shorts-ledger",
+  "version": "1.0.0",
   "private": true,
-  "description": "선별·검열된 유머 게시물 모음 사이트 (여러 커뮤니티 유머/베스트 게시판 수집)",
+  "description": "호네키 방송 다시보기 구간별 에피소드 장부 (Cloudflare Workers)",
   "type": "module",
-  "imports": {
-    "#platform": {
-      "workerd": "./src/platform/cloud.js",
-      "worker": "./src/platform/cloud.js",
-      "node": "./src/platform/node.js",
-      "default": "./src/platform/cloud.js"
-    }
-  },
   "scripts": {
-    "start": "node src/server.js",
-    "crawl": "node scripts/crawl-once.js",
-    "test:source": "node scripts/test-source.js",
-    "test": "node --test test/*.test.js",
-    "worker:dev": "wrangler dev --local",
-    "worker:deploy": "wrangler deploy",
-    "cloud:push": "node scripts/push-to-cloud.js"
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.135.0",
-    "cheerio": "^1.2.0",
-    "express": "^4.22.3",
-    "iconv-lite": "^0.7.3",
-    "sanitize-html": "^2.18.1"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
   "devDependencies": {
-    "wrangler": "^4.149.0"
+    "wrangler": "^4.0.0"
   }
 }
