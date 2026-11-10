@@ -42,6 +42,8 @@
     open: new Set(),
     ranked: null, // 추천 순 목록(검색·필터·정렬이 바뀔 때만 다시 셈)
     recStat: null,
+    tab: "ledger", // ledger | ai
+    aiDone: false,
   };
 
   // ---------- 작은 도구 ----------
@@ -66,11 +68,22 @@
     const parts = sc.split("·").map(Number).filter((x) => !Number.isNaN(x));
     return parts.length ? parts.reduce((a, b) => a + b, 0) / parts.length : -1;
   };
+  // 점수 'a·b·c' = 재미·이해·완결, 'a·-·-' = 재미만, 숫자 하나 = 종합 — 매기지 않은 칸('-')은 뺀다
+  const SCORE_KEYS = ["재미", "이해", "완결"];
+  function scoreParts(sc) {
+    const raw = (sc || "").split("·");
+    if (raw.length === 1) {
+      const n = Number(raw[0]);
+      return raw[0] === "" || Number.isNaN(n) ? [] : [["종합", n]];
+    }
+    return raw.map((x, i) => [SCORE_KEYS[i] || `${i + 1}`, Number(x)]).filter(([, n]) => !Number.isNaN(n));
+  }
+  const fmt1 = (v) => (Math.round(v * 10) / 10).toFixed(1);
   // 큰 주제 — 색은 주제마다 고정
   const TOPIC_HUE = {
     게임: 222, "버튜버·방송": 268, "시청자·채팅": 200, "고민 상담·사연": 160, "회사·일": 28, "학창 시절": 48,
-    가족: 340, "연애·결혼": 350, "음식·생활": 95, "애니·만화·덕질": 290, "음악·노래": 312, "일본·여행": 6,
-    "돈·IT·세상 이야기": 182, 기타: 220,
+    가족: 340, "연애·결혼": 350, "음식·생활": 95, "애니·만화·덕질": 290, "음악·노래": 312, "일본 유학": 6,
+    "경제·IT·세상 이야기": 182, 기타: 220,
   };
 
   function hl(parent, text, words) {
@@ -322,26 +335,33 @@
 
   // ---------- 에피소드 카드 ----------
   function epCard(ep, b, opts = {}) {
+    const pre = opts.prefix || ""; // 같은 에피소드가 다른 탭에도 있을 때 id 가 겹치지 않게
+    const words = opts.words || state.words;
     const art = el("article", "ep");
-    art.id = `ep-${ep.id}`;
+    art.id = `${pre}ep-${ep.id}`;
     art.tabIndex = -1;
     if (opts.rank != null) art.append(el("span", `rank${opts.rank <= 3 ? " top" : ""}`, String(opts.rank)));
+    if (opts.badge != null) {
+      const bd = el("span", `rank sbadge b${opts.band}`, opts.badge);
+      bd.title = "평균 점수(5점 만점)";
+      art.append(bd);
+    }
     const tbox = el("div", "ep-time");
     tbox.append(el("span", "time", `${hms(ep.s)} – ${hms(ep.e)}`), el("span", "len", lenText(ep.e - ep.s)));
     art.append(tbox);
     const main = el("div", "ep-main");
     if (opts.withSource) main.append(el("div", "ep-src", `${b.date} · ${b.title}`));
     const p = el("p", "ep-text");
-    hl(p, ep.c, state.words);
+    hl(p, ep.c, words);
     main.append(p);
     // 길거나 여러 구간이 합쳐진 에피소드는 눌러서 자세히(검색 중에는 처음부터 다 보임)
     const expandable = ep.c.length > 80 || (ep.p && ep.p.length > 1);
     let toggle = null;
     if (expandable) {
       art.classList.add("expandable");
-      if (state.words.length) art.classList.add("open");
+      if (words.length) art.classList.add("open");
       const detail = el("div", "ep-detail");
-      detail.id = `d-${ep.id}`;
+      detail.id = `${pre}d-${ep.id}`;
       detail.hidden = true;
       const more = el("button", "more-btn", "자세히");
       more.type = "button";
@@ -349,7 +369,7 @@
       more.setAttribute("aria-controls", detail.id);
       toggle = () => {
         const open = !(more.getAttribute("aria-expanded") === "true");
-        art.classList.toggle("open", open || state.words.length > 0);
+        art.classList.toggle("open", open || words.length > 0);
         more.setAttribute("aria-expanded", String(open));
         more.textContent = open ? "접기" : "자세히";
         if (open && !detail.childNodes.length) fillDetail(detail, ep, b);
@@ -377,17 +397,23 @@
       pos.append(track, el("span", "ep-pos-label", `방송 ${Math.round((ep.s / b.dur) * 100)}% 지점`));
       main.append(pos);
     }
-    if (ep.sc || (ep.tp && ep.tp.length) || art._more) {
+    const parts = scoreParts(ep.sc);
+    if (opts.meters && parts.length) main.append(scoreMeters(parts));
+    if (parts.length || (ep.tp && ep.tp.length) || art._more) {
       const meta = el("div", "ep-meta");
-      if (ep.sc) {
-        const s = el("span", "score", `점수 ${ep.sc}`);
-        s.title = ep.sc.includes("·") ? "재미·이해·완결(1~5)" : "종합 점수(1~5)";
+      if (parts.length && !opts.meters) {
+        const one = parts.length === 1;
+        const label = one
+          ? `${parts[0][0] === "종합" ? "점수" : parts[0][0]} ${parts[0][1]}`
+          : `점수 ${parts.map((x) => x[1]).join("·")}`;
+        const s = el("span", "score", label);
+        s.title = `${parts.map(([k, n]) => `${k} ${n}`).join(" · ")} (5점 만점)`;
         meta.append(s);
       }
       for (const tp of ep.tp || []) {
         const tg = el("span", "topic");
         tg.style.setProperty("--h", String(TOPIC_HUE[tp] ?? 220));
-        hl(tg, tp, state.words);
+        hl(tg, tp, words);
         meta.append(tg);
       }
       if (art._more) meta.append(art._more);
@@ -572,6 +598,188 @@
     $("#more").hidden = state.page * PAGE >= all.length;
   }
 
+  // ---------- AI 쇼츠 추천(점수별 묶음) ----------
+  const BANDS = [
+    { min: 4.5, label: "4.5점 이상", hue: 8 },
+    { min: 4.0, label: "4.0 ~ 4.4점", hue: 24 },
+    { min: 3.5, label: "3.5 ~ 3.9점", hue: 40 },
+    { min: 3.0, label: "3.0 ~ 3.4점", hue: 168 },
+    { min: -Infinity, label: "3점 미만", hue: 220 },
+  ];
+  const bandOf = (v) => BANDS.findIndex((x) => v >= x.min);
+  function scoreMeters(parts) {
+    const box = el("div", "meters");
+    box.setAttribute("role", "img");
+    box.setAttribute("aria-label", parts.map(([k, n]) => `${k} ${n}점`).join(", "));
+    for (const [k, n] of parts) {
+      const m = el("span", "mt");
+      const tr = el("span", "mt-tr");
+      const fl = el("span", "mt-fl");
+      fl.style.width = `${Math.min(Math.max(n / 5, 0), 1) * 100}%`;
+      tr.append(fl);
+      m.append(el("span", "mt-k", k), tr, el("b", null, String(n)));
+      box.append(m);
+    }
+    return box;
+  }
+  function aiItems() {
+    const all = [];
+    for (const b of broadcasts()) {
+      for (const ep of b.eps) {
+        const v = scoreVal(ep.sc);
+        if (v >= 0) all.push({ ep, b, v: Math.round(v * 10) / 10 }); // 배지·점수대·통계가 같은 값을 쓰게
+      }
+    }
+    all.sort(
+      (x, y) =>
+        y.v - x.v ||
+        recOf(y.ep.id) - recOf(x.ep.id) ||
+        (y.b.date || "").localeCompare(x.b.date || "") ||
+        x.ep.s - y.ep.s,
+    );
+    return all;
+  }
+  function renderAI(animate = true) {
+    const box = $("#panel-ai");
+    box.textContent = "";
+    const items = aiItems();
+    const groups = BANDS.map(() => []);
+    for (const it of items) groups[bandOf(it.v)].push(it);
+
+    const head = el("section", "ai-head");
+    head.setAttribute("aria-label", "AI 쇼츠 추천 한눈에 보기");
+    const intro = el("div", "card ai-intro");
+    intro.append(
+      el("h2", null, "AI 쇼츠 추천"),
+      el(
+        "p",
+        null,
+        "쇼츠로 잘라 볼 만한 장면을 AI가 재미·이해·완결 세 가지로 1~5점씩 매겼습니다. 평균 점수가 높은 순으로 묶었어요.",
+      ),
+    );
+    const avg = items.length ? items.reduce((a, x) => a + x.v, 0) / items.length : 0;
+    const stats = el("div", "ai-stats");
+    const top4 = items.filter((x) => x.v >= 4).length;
+    for (const [n, label, isInt] of [
+      [items.length, "점수 매긴 에피소드", true],
+      [avg, "평균 점수", false],
+      [top4, "4점 이상", true],
+    ]) {
+      const s = el("div");
+      const b = el("b", null, isInt ? "0" : fmt1(n));
+      s.append(b, el("span", null, label));
+      stats.append(s);
+      if (isInt) {
+        if (animate) countUp(b, n);
+        else b.textContent = n.toLocaleString();
+      }
+    }
+    intro.append(stats);
+    head.append(intro);
+    reveal(intro, !animate);
+
+    const dist = el("div", "card ai-dist");
+    const h2 = el("h2", null, "점수대별 에피소드");
+    h2.append(el("span", "hint", "누르면 그 점수대로 이동"));
+    dist.append(h2);
+    const maxN = Math.max(1, ...groups.map((g) => g.length));
+    BANDS.forEach((band, i) => {
+      if (!groups[i].length) return;
+      const row = el("button", "hbar");
+      row.type = "button";
+      const fl = el("span", "fl");
+      fl.style.width = `${(groups[i].length / maxN) * 100}%`;
+      fl.style.background = `hsl(${band.hue} 78% 52%)`;
+      const tr = el("span", "tr");
+      tr.append(fl);
+      row.append(el("span", "lab", band.label), tr, el("span", "val", String(groups[i].length)));
+      row.setAttribute("aria-label", `${band.label} ${groups[i].length}개 — 그 점수대로 이동`);
+      row.addEventListener("click", () => {
+        const sec = document.getElementById(`band-${i}`);
+        if (!sec) return;
+        sec.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+        const h = sec.querySelector("h3");
+        if (h) h.focus({ preventScroll: true });
+      });
+      dist.append(row);
+    });
+    head.append(dist);
+    reveal(dist, !animate);
+    box.append(head);
+
+    if (!items.length) {
+      box.append(el("p", "empty", "점수를 매긴 에피소드가 없습니다"));
+      return;
+    }
+    BANDS.forEach((band, i) => {
+      if (!groups[i].length) return;
+      const sec = el("section", "sgroup");
+      sec.id = `band-${i}`;
+      const h3 = el("h3", "sg-h");
+      h3.tabIndex = -1;
+      const dot = el("span", "sg-dot");
+      dot.style.setProperty("--h", String(band.hue));
+      h3.append(dot, el("span", null, band.label), el("span", "pill", `에피소드 ${groups[i].length}`));
+      sec.append(h3);
+      const list = el("div", "ranked ai-list");
+      for (const { ep, b, v } of groups[i]) {
+        const opts = { prefix: "ai-", words: [], withSource: true, badge: fmt1(v), band: i, meters: true, now: !animate };
+        list.append(epCard(ep, b, opts));
+      }
+      sec.append(list);
+      box.append(sec);
+    });
+  }
+
+  // ---------- 탭 ----------
+  function setTab(tab, { focus = false, push = true } = {}) {
+    if (tab !== "ai") tab = "ledger";
+    state.tab = tab;
+    for (const t of document.querySelectorAll('.tabs [role="tab"]')) {
+      const on = t.id === `tab-${tab}`;
+      t.setAttribute("aria-selected", String(on));
+      t.tabIndex = on ? 0 : -1;
+      if (on && focus) t.focus();
+    }
+    $("#panel-ledger").hidden = tab !== "ledger";
+    $("#panel-ai").hidden = tab !== "ai";
+    if (tab === "ai" && state.data && !state.aiDone) {
+      state.aiDone = true;
+      renderAI(true);
+    }
+    if (push) {
+      const want = tab === "ai" ? "#ai" : "";
+      if (location.hash !== want) {
+        try {
+          history.replaceState(null, "", `${location.pathname}${location.search}${want}`);
+        } catch {
+          /* 주소를 못 바꿔도 화면은 그대로 */
+        }
+      }
+    }
+    const tabs = document.querySelector(".tabs");
+    if (tabs && tabs.getBoundingClientRect().top < 0) {
+      window.scrollTo({ top: Math.max(tabs.getBoundingClientRect().top + window.scrollY - 8, 0), behavior: "auto" });
+    }
+  }
+  function bindTabs() {
+    const tabs = [...document.querySelectorAll('.tabs [role="tab"]')];
+    tabs.forEach((t, i) => {
+      t.addEventListener("click", () => setTab(t.id.slice(4)));
+      t.addEventListener("keydown", (e) => {
+        let j = -1;
+        if (e.key === "ArrowRight") j = (i + 1) % tabs.length;
+        else if (e.key === "ArrowLeft") j = (i - 1 + tabs.length) % tabs.length;
+        else if (e.key === "Home") j = 0;
+        else if (e.key === "End") j = tabs.length - 1;
+        if (j < 0) return;
+        e.preventDefault();
+        setTab(tabs[j].id.slice(4), { focus: true });
+      });
+    });
+    window.addEventListener("hashchange", () => setTab(location.hash === "#ai" ? "ai" : "ledger", { push: false }));
+  }
+
   function renderList() {
     if (!state.data) return;
     state.ranked = null;
@@ -582,6 +790,9 @@
     if (!state.data) return;
     renderOverview(animate);
     renderList();
+    if (!state.aiDone) return;
+    if (animate) renderAI(true);
+    else for (const btn of document.querySelectorAll("#panel-ai [data-rec]")) paintRec(btn, btn.dataset.rec); // 펼친 카드·초점 유지
   }
 
   // ---------- 시작 ----------
@@ -641,7 +852,7 @@
     const sel = $("#topic");
     sel.value = tp;
     sel.classList.toggle("on", Boolean(tp));
-    for (const b of document.querySelectorAll("button.hbar")) b.setAttribute("aria-pressed", String(b.dataset.topic === tp));
+    for (const b of document.querySelectorAll("button.hbar[data-topic]")) b.setAttribute("aria-pressed", String(b.dataset.topic === tp));
     renderList();
     if (jump) scrollToList();
   }
@@ -700,6 +911,8 @@
 
   async function main() {
     bindControls();
+    bindTabs();
+    setTab(location.hash === "#ai" ? "ai" : "ledger", { push: false }); // 데이터 전 — 화면만 바꿔 둠
     const votesP = fetchVotes(); // 데이터와 동시에
     votesP.catch(() => {});
     try {
@@ -709,14 +922,20 @@
       if (!data || !data.channels || !data.channels.length) throw new Error("empty");
       state.data = data;
     } catch {
-      $("#list").append(el("p", "empty", "장부를 불러오지 못했습니다. 잠시 뒤 새로고침해 주세요."));
+      for (const box of [$("#list"), $("#panel-ai")]) {
+        box.append(el("p", "empty", "장부를 불러오지 못했습니다. 잠시 뒤 새로고침해 주세요."));
+      }
       return;
     }
     for (const b of broadcasts()) for (const ep of b.eps) bcOf.set(ep.id, b);
     fillTopics();
+    const nAi = aiItems().length;
+    $("#tab-ai-n").textContent = String(nAi);
+    $("#tab-ai").setAttribute("aria-label", `AI 쇼츠 추천 — 점수 매긴 에피소드 ${nAi}개`);
     $("#foot").textContent =
       `데이터 기준일 ${state.data.generated} · 구간은 원본 다시보기 기준(시:분:초) · ` +
-      "점수는 장부를 만들 때 매긴 값(a·b·c = 재미·이해·완결 1~5, 숫자 하나 = 종합 1~5)이며 없는 에피소드도 있습니다.";
+      "점수는 AI가 매긴 값(재미·이해·완결 각 1~5점, 숫자 하나는 종합 점수)이며 점수가 없는 에피소드도 있습니다.";
+    if (state.tab === "ai") state.aiDone = true; // 주소가 #ai 로 열렸으면 처음부터 그 탭을 그린다
     renderAll(true); // 추천 수를 기다리지 않고 먼저 그린다
     await applyVotes(votesP);
     renderAll(false);

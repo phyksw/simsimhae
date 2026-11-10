@@ -15,9 +15,15 @@
   <div class="wrap">
     <h1 class="brand"><span class="logo" aria-hidden="true"></span>호네키 쇼츠 장부</h1>
     <p class="sub">호네키 방송 다시보기 구간마다 어떤 에피소드가 나오는지 모았습니다. 마음에 드는 에피소드는 추천해 주세요.</p>
+    <div class="tabs" role="tablist" aria-label="보기 고르기">
+      <button type="button" role="tab" id="tab-ledger" aria-controls="panel-ledger" aria-selected="true">에피소드 장부</button>
+      <button type="button" role="tab" id="tab-ai" aria-controls="panel-ai" aria-selected="false" tabindex="-1">AI 쇼츠 추천<span class="tab-n" id="tab-ai-n"></span></button>
+    </div>
   </div>
 </header>
 <main class="wrap">
+ <p class="notice" id="notice" hidden></p>
+ <div id="panel-ledger" role="tabpanel" aria-labelledby="tab-ledger">
   <section class="overview" id="overview" aria-label="한눈에 보기"></section>
   <div class="bar" id="bar">
     <div class="search" role="search">
@@ -32,9 +38,10 @@
     <label class="chk"><input type="checkbox" id="onlyScore"> 점수 있는 것만</label>
   </div>
   <p class="count" id="count" aria-live="polite"></p>
-  <p class="notice" id="notice" hidden></p>
   <div id="list" class="list"></div>
   <div class="more-wrap"><button type="button" class="btn" id="more" hidden>더 보기</button></div>
+ </div>
+ <div id="panel-ai" class="ai" role="tabpanel" aria-labelledby="tab-ai" hidden></div>
 </main>
 <footer class="foot">
   <div class="wrap" id="foot"></div>
