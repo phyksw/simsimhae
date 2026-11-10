@@ -321,6 +321,38 @@
     const p = el("p", "ep-text");
     hl(p, ep.c, state.words);
     main.append(p);
+    // 길거나 여러 구간이 합쳐진 에피소드는 눌러서 자세히(검색 중에는 처음부터 다 보임)
+    const expandable = ep.c.length > 80 || (ep.p && ep.p.length > 1);
+    let toggle = null;
+    if (expandable) {
+      art.classList.add("expandable");
+      if (state.words.length) art.classList.add("open");
+      const detail = el("div", "ep-detail");
+      detail.id = `d-${ep.id}`;
+      detail.hidden = true;
+      const more = el("button", "more-btn", "자세히");
+      more.type = "button";
+      more.setAttribute("aria-expanded", "false");
+      more.setAttribute("aria-controls", detail.id);
+      toggle = () => {
+        const open = !(more.getAttribute("aria-expanded") === "true");
+        art.classList.toggle("open", open || state.words.length > 0);
+        more.setAttribute("aria-expanded", String(open));
+        more.textContent = open ? "접기" : "자세히";
+        if (open && !detail.childNodes.length) fillDetail(detail, ep, b);
+        detail.hidden = !open;
+      };
+      more.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        toggle();
+      });
+      p.addEventListener("click", () => {
+        if (window.getSelection && String(window.getSelection())) return; // 글을 고르는 중이면 그대로
+        toggle();
+      });
+      main.append(detail);
+      art._more = more;
+    }
     if (b.dur > 0) {
       const pos = el("div", "ep-pos");
       pos.setAttribute("aria-hidden", "true");
@@ -332,7 +364,7 @@
       pos.append(track, el("span", "ep-pos-label", `방송 ${Math.round((ep.s / b.dur) * 100)}% 지점`));
       main.append(pos);
     }
-    if (ep.sc || ep.tg.length) {
+    if (ep.sc || ep.tg.length || art._more) {
       const meta = el("div", "ep-meta");
       if (ep.sc) {
         const s = el("span", "score", `점수 ${ep.sc}`);
@@ -345,11 +377,35 @@
         hl(tg, `#${t}`, state.words);
         meta.append(tg);
       }
+      if (art._more) meta.append(art._more);
       main.append(meta);
     }
     art.append(main, recButton(ep));
     reveal(art, opts.now);
     return art;
+  }
+
+  function fillDetail(box, ep, b) {
+    if (ep.p && ep.p.length > 1) {
+      box.append(el("div", "d-head", `이 에피소드가 나오는 구간 ${ep.p.length}곳`));
+      const list = el("div", "d-spans");
+      for (const [s, e] of ep.p) {
+        const it = el("span", "d-span");
+        it.append(el("span", "time sm", `${hms(s)} – ${hms(e)}`), el("span", "len", lenText(e - s)));
+        list.append(it);
+      }
+      box.append(list);
+    }
+    const info = el("div", "d-info");
+    info.append(document.createTextNode(`${b.date} · ${b.title}`));
+    if (b.url) {
+      const a = el("a", "src-link", "원본 다시보기 열기 ↗");
+      a.href = b.url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      info.append(document.createTextNode(" "), a);
+    }
+    box.append(info);
   }
 
   // ---------- 방송 타임라인(인포그래픽) ----------

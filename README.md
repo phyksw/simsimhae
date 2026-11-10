@@ -31,3 +31,16 @@ npx wrangler deploy
 ```
 
 로컬 시험은 `npx wrangler dev`.
+
+## 되돌리기
+
+판마다 git 태그를 단다(`ledger-v1` = 첫 공개판).
+
+```bash
+# 저장소 내용을 첫 공개판으로 되돌려 새 커밋으로 남기기
+git checkout ledger-v1 -- .
+git commit -m "ledger-v1 로 되돌리기"
+npx wrangler deploy
+```
+
+배포만 바로 되돌릴 때는 Cloudflare 대시보드(Workers → simsimhae → Deployments)에서 이전 배포를 고르거나 `npx wrangler rollback`.

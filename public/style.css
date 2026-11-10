@@ -117,6 +117,21 @@ details.bc[open]>summary::before{transform:rotate(90deg)}
 .ep-main{min-width:0;border-left:3px solid var(--accent-soft);padding-left:13px}
 .ep-src{font-size:12px;color:var(--sub);margin-bottom:3px}
 .ep-text{margin:0;word-break:keep-all;overflow-wrap:anywhere}
+.ep.expandable .ep-text{cursor:pointer;display:-webkit-box;-webkit-line-clamp:3;line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.ep.expandable.open .ep-text{display:block;-webkit-line-clamp:unset;line-clamp:none;overflow:visible}
+.more-btn{border:0;background:transparent;color:var(--accent);font-size:12px;font-weight:650;padding:0 2px;cursor:pointer;
+  margin-left:auto;white-space:nowrap}
+.more-btn::after{content:"";display:inline-block;margin-left:5px;vertical-align:2px;border-top:5px solid currentColor;
+  border-left:4px solid transparent;border-right:4px solid transparent;transition:transform .2s}
+.more-btn[aria-expanded="true"]::after{transform:rotate(180deg)}
+.ep-detail{margin-top:8px;padding:10px 12px;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;
+  animation:dropin .25s ease}
+.d-head{font-size:12.5px;font-weight:700;margin-bottom:6px}
+.d-spans{display:flex;flex-wrap:wrap;gap:6px 10px;margin-bottom:8px}
+.d-span{display:inline-flex;align-items:center;gap:4px}
+.time.sm{font-size:11.5px;padding:1px 9px 1px 7px}
+.d-info{font-size:12px;color:var(--sub)}
+.d-info .src-link{margin:0}
 .ep-pos{display:flex;align-items:center;gap:8px;margin-top:7px}
 .ep-pos-track{position:relative;flex:0 1 200px;height:6px;background:var(--track);border-radius:4px;overflow:hidden}
 .ep-pos-fill{position:absolute;top:0;bottom:0;border-radius:4px;background:var(--accent);min-width:3px}
@@ -160,6 +175,7 @@ mark{background:var(--mark);color:inherit;border-radius:3px;padding:0 1px}
 @keyframes pop{0%{transform:scale(1)}40%{transform:scale(1.45)}100%{transform:scale(1)}}
 @keyframes spark{from{transform:translate(-50%,-50%) translate(0,0) scale(1);opacity:1}
   to{transform:translate(-50%,-50%) translate(var(--dx),var(--dy)) scale(.3);opacity:0}}
+@keyframes dropin{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 @keyframes flash{0%,100%{background:transparent}25%{background:var(--accent-soft)}}
 
 @media (max-width:760px){
