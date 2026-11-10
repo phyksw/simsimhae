@@ -31,6 +31,7 @@
   const state = {
     data: null,
     words: [],
+    topic: "",
     sort: "bc",
     onlyScore: false,
     counts: {},
@@ -65,12 +66,13 @@
     const parts = sc.split("·").map(Number).filter((x) => !Number.isNaN(x));
     return parts.length ? parts.reduce((a, b) => a + b, 0) / parts.length : -1;
   };
-  const PALETTE = [210, 262, 330, 18, 150, 42, 188, 0];
-  const tagHue = (t) => {
-    let h = 0;
-    for (const ch of t) h = (h * 31 + ch.codePointAt(0)) >>> 0;
-    return PALETTE[h % PALETTE.length];
+  // 큰 주제 — 색은 주제마다 고정
+  const TOPIC_HUE = {
+    게임: 222, "버튜버·방송": 268, "시청자·채팅": 200, "고민 상담·사연": 160, "회사·일": 28, "학창 시절": 48,
+    가족: 340, "연애·결혼": 350, "음식·생활": 95, "애니·만화·덕질": 290, "음악·노래": 312, "일본·여행": 6,
+    "돈·IT·세상 이야기": 182, 기타: 220,
   };
+
   function hl(parent, text, words) {
     if (!words.length) {
       parent.append(document.createTextNode(text));
@@ -143,8 +145,9 @@
   const broadcasts = () => (state.data && state.data.channels[0] ? state.data.channels[0].broadcasts : []);
   function matches(ep, b) {
     if (state.onlyScore && !ep.sc) return false;
+    if (state.topic && !(ep.tp || []).includes(state.topic)) return false;
     if (!state.words.length) return true;
-    const hay = `${ep.c} ${ep.tg.join(" ")} ${b.title} ${b.date}`.toLowerCase();
+    const hay = `${ep.c} ${ep.tg.join(" ")} ${(ep.tp || []).join(" ")} ${b.title} ${b.date}`.toLowerCase();
     return state.words.every((w) => hay.includes(w));
   }
   const recOf = (id) => state.counts[id] || 0;
@@ -172,20 +175,30 @@
       else b.textContent = n.toLocaleString();
       if (i === 3) state.recStat = b;
     });
-    const tagCount = new Map();
-    for (const e of eps) for (const t of e.tg) tagCount.set(t, (tagCount.get(t) || 0) + 1);
-    const top = [...tagCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+    const topicCount = new Map();
+    for (const e of eps) for (const tp of e.tp || []) topicCount.set(tp, (topicCount.get(tp) || 0) + 1);
+    const top = (state.data.topics || [...topicCount.keys()])
+      .filter((tp) => topicCount.get(tp))
+      .map((tp) => [tp, topicCount.get(tp)])
+      .sort((a, b) => b[1] - a[1]);
     const tags = el("div", "card chart-tags");
-    tags.append(el("h2", null, "많이 나온 주제"));
+    const h2 = el("h2", null, "주제별 에피소드");
+    h2.append(el("span", "hint", "누르면 그 주제만 보기"));
+    tags.append(h2);
     const maxT = top.length ? top[0][1] : 1;
-    for (const [t, n] of top) {
-      const row = el("div", "hbar");
+    for (const [tp, n] of top) {
+      const row = el("button", "hbar");
+      row.type = "button";
+      row.dataset.topic = tp;
+      row.setAttribute("aria-pressed", String(state.topic === tp));
       const fl = el("span", "fl");
       fl.style.width = `${(n / maxT) * 100}%`;
+      fl.style.background = `hsl(${TOPIC_HUE[tp] ?? 220} 62% 52%)`;
       const tr = el("span", "tr");
       tr.append(fl);
-      row.append(el("span", "lab", t), tr, el("span", "val", String(n)));
-      row.title = `${t} — ${n}개`;
+      row.append(el("span", "lab", tp), tr, el("span", "val", String(n)));
+      row.setAttribute("aria-label", `${tp} ${n}개 — 이 주제만 보기`);
+      row.addEventListener("click", () => setTopic(state.topic === tp ? "" : tp, true));
       tags.append(row);
     }
     if (!top.length) tags.append(el("p", "empty", "주제 표시가 없습니다"));
@@ -364,17 +377,17 @@
       pos.append(track, el("span", "ep-pos-label", `방송 ${Math.round((ep.s / b.dur) * 100)}% 지점`));
       main.append(pos);
     }
-    if (ep.sc || ep.tg.length || art._more) {
+    if (ep.sc || (ep.tp && ep.tp.length) || art._more) {
       const meta = el("div", "ep-meta");
       if (ep.sc) {
         const s = el("span", "score", `점수 ${ep.sc}`);
         s.title = ep.sc.includes("·") ? "재미·이해·완결(1~5)" : "종합 점수(1~5)";
         meta.append(s);
       }
-      for (const t of ep.tg) {
-        const tg = el("span", "tag");
-        tg.style.setProperty("--h", String(tagHue(t)));
-        hl(tg, `#${t}`, state.words);
+      for (const tp of ep.tp || []) {
+        const tg = el("span", "topic");
+        tg.style.setProperty("--h", String(TOPIC_HUE[tp] ?? 220));
+        hl(tg, tp, state.words);
         meta.append(tg);
       }
       if (art._more) meta.append(art._more);
@@ -615,16 +628,56 @@
     }
   }
 
+  function scrollToList() {
+    const bar = $("#bar");
+    const y = $("#count").getBoundingClientRect().top + window.scrollY - (bar ? bar.offsetHeight : 0) - 8;
+    if (window.scrollY > y || $("#count").getBoundingClientRect().top > window.innerHeight * 0.6) {
+      window.scrollTo({ top: Math.max(y, 0), behavior: reduceMotion ? "auto" : "smooth" });
+    }
+  }
+  function setTopic(tp, jump = false) {
+    state.topic = tp;
+    state.page = 1;
+    const sel = $("#topic");
+    sel.value = tp;
+    sel.classList.toggle("on", Boolean(tp));
+    for (const b of document.querySelectorAll("button.hbar")) b.setAttribute("aria-pressed", String(b.dataset.topic === tp));
+    renderList();
+    if (jump) scrollToList();
+  }
+  function fillTopics() {
+    const sel = $("#topic");
+    const counts = new Map();
+    for (const b of broadcasts()) for (const e of b.eps) for (const tp of e.tp || []) counts.set(tp, (counts.get(tp) || 0) + 1);
+    for (const tp of state.data.topics || [...counts.keys()]) {
+      if (!counts.get(tp)) continue;
+      const o = el("option", null, `${tp} (${counts.get(tp)})`);
+      o.value = tp;
+      sel.append(o);
+    }
+  }
   function bindControls() {
     let timer = 0;
-    $("#q").addEventListener("input", (e) => {
+    const runSearch = (jump) => {
       clearTimeout(timer);
-      timer = setTimeout(() => {
-        state.words = e.target.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-        state.page = 1;
-        renderList();
-      }, 160);
+      state.words = $("#q").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      state.page = 1;
+      renderList();
+      if (jump) scrollToList();
+    };
+    $("#q").addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => runSearch(false), 200);
     });
+    $("#q").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.isComposing) {
+        e.preventDefault();
+        runSearch(true);
+        e.target.blur(); // 휴대폰 자판 내리기
+      }
+    });
+    $("#go").addEventListener("click", () => runSearch(true));
+    $("#topic").addEventListener("change", (e) => setTopic(e.target.value, true));
     $("#onlyScore").addEventListener("change", (e) => {
       state.onlyScore = e.target.checked;
       state.page = 1;
@@ -660,6 +713,7 @@
       return;
     }
     for (const b of broadcasts()) for (const ep of b.eps) bcOf.set(ep.id, b);
+    fillTopics();
     $("#foot").textContent =
       `데이터 기준일 ${state.data.generated} · 구간은 원본 다시보기 기준(시:분:초) · ` +
       "점수는 장부를 만들 때 매긴 값(a·b·c = 재미·이해·완결 1~5, 숫자 하나 = 종합 1~5)이며 없는 에피소드도 있습니다.";

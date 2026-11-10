@@ -20,7 +20,11 @@
 <main class="wrap">
   <section class="overview" id="overview" aria-label="한눈에 보기"></section>
   <div class="bar" id="bar">
-    <input type="search" id="q" placeholder="낱말로 찾기 — 예: 보컬학원, 회사, 유통기한" aria-label="낱말로 찾기" autocomplete="off">
+    <div class="search" role="search">
+      <input type="search" id="q" placeholder="낱말로 찾기 — 예: 보컬학원, 회사, 유통기한" aria-label="낱말로 찾기" autocomplete="off" enterkeyhint="search">
+      <button type="button" class="go" id="go" aria-label="검색"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg><span>검색</span></button>
+    </div>
+    <select id="topic" class="topic-sel" aria-label="주제 고르기"><option value="">모든 주제</option></select>
     <div class="seg-ctl" role="group" aria-label="보기 순서">
       <button type="button" data-sort="bc" aria-pressed="true">방송별</button>
       <button type="button" data-sort="rec" aria-pressed="false">추천 많은 순</button>
