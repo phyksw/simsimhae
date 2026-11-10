@@ -44,6 +44,8 @@
     recStat: null,
     tab: "ledger", // ledger | ai
     aiDone: false,
+    topicsOpen: false, // 주제별 에피소드 펼침(기본 닫힘 — 다시 그려도 유지)
+    aiTopic: "", // AI 쇼츠 추천 탭 주제 필터
   };
 
   // ---------- 작은 도구 ----------
@@ -86,6 +88,7 @@
     "경제·IT·세상 이야기": 182, 기타: 220,
   };
 
+  const PART_RE = /\s\((\d+)\/(\d+)\)$/; // 제목 끝 (k/N) — 한 이야기를 여러 구간으로 나눈 것
   function hl(parent, text, words) {
     if (!words.length) {
       parent.append(document.createTextNode(text));
@@ -146,7 +149,9 @@
       return;
     }
     const t0 = performance.now();
+    node._cu = t0;
     const step = (t) => {
+      if (node._cu !== t0) return; // 그사이 다른 값으로 바뀜
       const p = Math.min((t - t0) / 900, 1);
       node.textContent = Math.round(n * (1 - (1 - p) ** 3)).toLocaleString();
       if (p < 1) requestAnimationFrame(step);
@@ -160,7 +165,7 @@
     if (state.onlyScore && !ep.sc) return false;
     if (state.topic && !(ep.tp || []).includes(state.topic)) return false;
     if (!state.words.length) return true;
-    const hay = `${ep.c} ${ep.tg.join(" ")} ${(ep.tp || []).join(" ")} ${b.title} ${b.date}`.toLowerCase();
+    const hay = `${ep.c} ${ep.d || ""} ${ep.tg.join(" ")} ${(ep.tp || []).join(" ")} ${b.title} ${b.date}`.toLowerCase();
     return state.words.every((w) => hay.includes(w));
   }
   const recOf = (id) => state.counts[id] || 0;
@@ -194,10 +199,22 @@
       .filter((tp) => topicCount.get(tp))
       .map((tp) => [tp, topicCount.get(tp)])
       .sort((a, b) => b[1] - a[1]);
-    const tags = el("div", "card chart-tags");
+    // 주제별 에피소드 — 눌러서 펼치기(기본 닫힘)
+    const tags = el("details", "card chart-tags");
+    tags.open = state.topicsOpen;
+    const sum = el("summary");
     const h2 = el("h2", null, "주제별 에피소드");
-    h2.append(el("span", "hint", "누르면 그 주제만 보기"));
-    tags.append(h2);
+    h2.append(el("span", "hint", `주제 ${top.length}개`));
+    const now = el("span", "tp-now");
+    now.hidden = !state.topic;
+    if (state.topic) now.textContent = `지금: ${state.topic}`;
+    sum.append(h2, now);
+    tags.append(sum);
+    tags.addEventListener("toggle", () => {
+      state.topicsOpen = tags.open;
+    });
+    const tbody = el("div", "tp-body");
+    tbody.append(el("p", "tp-help", "막대를 누르면 그 주제만 봅니다. 한 번 더 누르면 모든 주제로 돌아갑니다."));
     const maxT = top.length ? top[0][1] : 1;
     for (const [tp, n] of top) {
       const row = el("button", "hbar");
@@ -211,33 +228,16 @@
       tr.append(fl);
       row.append(el("span", "lab", tp), tr, el("span", "val", String(n)));
       row.setAttribute("aria-label", `${tp} ${n}개 — 이 주제만 보기`);
-      row.addEventListener("click", () => setTopic(state.topic === tp ? "" : tp, true));
-      tags.append(row);
+      row.addEventListener("click", (ev) => {
+        setTopic(state.topic === tp ? "" : tp, true);
+        if (ev.detail === 0) $("#count").focus({ preventScroll: true }); // 키보드로 눌렀을 때만
+      });
+      tbody.append(row);
     }
-    if (!top.length) tags.append(el("p", "empty", "주제 표시가 없습니다"));
+    if (!top.length) tbody.append(el("p", "empty", "주제 표시가 없습니다"));
+    tags.append(tbody);
     box.append(tags);
     reveal(tags, !animate);
-    const byMonth = new Map();
-    for (const b of bcs) {
-      const m = (b.date || "").slice(0, 7);
-      if (m) byMonth.set(m, (byMonth.get(m) || 0) + b.eps.length);
-    }
-    const months = [...byMonth.entries()].sort((a, b) => a[0].localeCompare(b[0])).slice(-8);
-    const mc = el("div", "card chart-months");
-    mc.append(el("h2", null, "달마다 기록한 에피소드"));
-    const bars = el("div", "vbars");
-    const maxM = Math.max(1, ...months.map((x) => x[1]));
-    for (const [m, n] of months) {
-      const vb = el("div", "vb");
-      const col = el("span", "col");
-      col.style.height = `${Math.max((n / maxM) * 86, 4)}px`;
-      vb.append(el("span", "n", String(n)), col, el("span", "m", `${Number(m.slice(5))}월`));
-      vb.title = `${m} — ${n}개`;
-      bars.append(vb);
-    }
-    mc.append(bars);
-    box.append(mc);
-    reveal(mc, !animate);
   }
 
   // ---------- 추천 ----------
@@ -296,6 +296,24 @@
       state.recStat.textContent = total.toLocaleString();
     }
   }
+  function repaintAll() {
+    for (const btn of document.querySelectorAll("[data-rec]")) paintRec(btn, btn.dataset.rec);
+    for (const s of document.querySelectorAll("[data-seg]")) s.classList.toggle("hot", recOf(s.dataset.seg) > 0);
+    for (const pill of document.querySelectorAll("[data-bcrec]")) {
+      const b = broadcasts().find((x) => x.k === pill.dataset.bcrec);
+      if (!b) continue;
+      const sum = b.eps.filter((e) => matches(e, b)).reduce((a, e) => a + recOf(e.id), 0);
+      pill.textContent = `추천 ${sum}`;
+      pill.hidden = sum === 0;
+    }
+    if (state.recStat) {
+      const total = broadcasts()
+        .flatMap((x) => x.eps)
+        .reduce((a, e) => a + recOf(e.id), 0);
+      state.recStat._cu = 0;
+      state.recStat.textContent = total.toLocaleString();
+    }
+  }
   async function sendVote(id, on) {
     const r = await fetch("/api/vote", {
       method: "POST",
@@ -351,11 +369,27 @@
     art.append(tbox);
     const main = el("div", "ep-main");
     if (opts.withSource) main.append(el("div", "ep-src", `${b.date} · ${b.title}`));
-    const p = el("p", "ep-text");
-    hl(p, ep.c, words);
-    main.append(p);
-    // 길거나 여러 구간이 합쳐진 에피소드는 눌러서 자세히(검색 중에는 처음부터 다 보임)
-    const expandable = ep.c.length > 80 || (ep.p && ep.p.length > 1);
+    // 제목(크게 요약한 한 문장) → 본문(내용). 이어지는 이야기는 제목 끝 (k/N)
+    const legacy = !ep.d && ep.c.length > 90; // 제목+본문으로 나누기 전 긴 글
+    const head = el("p", legacy ? "ep-head legacy" : "ep-head");
+    const part = PART_RE.exec(ep.c);
+    if (part) {
+      hl(head, ep.c.slice(0, part.index), words);
+      const pt = el("span", "ep-part", `(${part[1]}/${part[2]})`);
+      pt.title = `한 이야기를 ${part[2]}개 구간으로 나눈 것 중 ${part[1]}번째`;
+      head.append(document.createTextNode(" "), pt);
+    } else {
+      hl(head, ep.c, words);
+    }
+    main.append(head);
+    let p = null;
+    if (ep.d) {
+      p = el("p", "ep-text");
+      hl(p, ep.d, words);
+      main.append(p);
+    }
+    // 본문이 길거나 여러 구간이 합쳐진 에피소드는 눌러서 자세히(검색 중에는 처음부터 다 보임)
+    const expandable = legacy || (ep.d || "").length > 90 || (ep.p && ep.p.length > 1);
     let toggle = null;
     if (expandable) {
       art.classList.add("expandable");
@@ -379,10 +413,12 @@
         ev.stopPropagation();
         toggle();
       });
-      p.addEventListener("click", () => {
+      const onText = () => {
         if (window.getSelection && String(window.getSelection())) return; // 글을 고르는 중이면 그대로
         toggle();
-      });
+      };
+      head.addEventListener("click", onText);
+      if (p) p.addEventListener("click", onText);
       main.append(detail);
       art._more = more;
     }
@@ -536,7 +572,7 @@
       hl(t, b.title, state.words);
       sm.append(t, el("span", "pill", `에피소드 ${eps.length}`));
       const recSum = eps.reduce((a, e) => a + recOf(e.id), 0);
-      const pill = el("span", "pill rec", `추천 ${recSum}`);
+      const pill = el("span", "pill pill-rec", `추천 ${recSum}`);
       pill.dataset.bcrec = b.k;
       pill.hidden = recSum === 0;
       sm.append(pill);
@@ -546,7 +582,7 @@
       // 검색 중 자동으로 펼친 방송은 기억하지 않는다(검색어를 지우면 원래대로)
       const shouldOpen = searching
         ? opened < SEARCH_OPEN_MAX
-        : state.open.has(b.k) || (state.open.size === 0 && nb === 1);
+        : state.open.has(b.k);
       if (shouldOpen) {
         opened++;
         d.open = true;
@@ -642,7 +678,10 @@
   function renderAI(animate = true) {
     const box = $("#panel-ai");
     box.textContent = "";
-    const items = aiItems();
+    const allItems = aiItems();
+    const hasTp = (it, tp) => (it.ep.tp || []).includes(tp);
+    if (state.aiTopic && !allItems.some((it) => hasTp(it, state.aiTopic))) state.aiTopic = "";
+    const items = state.aiTopic ? allItems.filter((it) => hasTp(it, state.aiTopic)) : allItems;
     const groups = BANDS.map(() => []);
     for (const it of items) groups[bandOf(it.v)].push(it);
 
@@ -697,7 +736,9 @@
       row.addEventListener("click", () => {
         const sec = document.getElementById(`band-${i}`);
         if (!sec) return;
-        sec.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+        const bar = $("#panel-ai .ai-bar");
+        const y = sec.getBoundingClientRect().top + window.scrollY - (bar ? bar.offsetHeight : 0) - 10;
+        window.scrollTo({ top: Math.max(y, 0), behavior: reduceMotion ? "auto" : "smooth" });
         const h = sec.querySelector("h3");
         if (h) h.focus({ preventScroll: true });
       });
@@ -707,8 +748,51 @@
     reveal(dist, !animate);
     box.append(head);
 
+    // 주제 고르기(AI 쇼츠 추천 안에서만)
+    const bar = el("div", "ai-bar");
+    const lab = el("label", "ai-bar-lab", "주제");
+    lab.htmlFor = "ai-topic";
+    const sel = el("select", "topic-sel");
+    sel.id = "ai-topic";
+    const o0 = el("option", null, `모든 주제 (${allItems.length})`);
+    o0.value = "";
+    sel.append(o0);
+    const tpCount = new Map();
+    for (const it of allItems) for (const tp of it.ep.tp || []) tpCount.set(tp, (tpCount.get(tp) || 0) + 1);
+    for (const tp of state.data.topics || [...tpCount.keys()]) {
+      if (!tpCount.get(tp)) continue;
+      const o = el("option", null, `${tp} (${tpCount.get(tp)})`);
+      o.value = tp;
+      sel.append(o);
+    }
+    sel.value = state.aiTopic;
+    sel.classList.toggle("on", Boolean(state.aiTopic));
+    const pickAiTopic = (tp) => {
+      state.aiTopic = tp;
+      renderAI(false);
+      const head = $("#panel-ai .ai-head");
+      if (head) {
+        const top = Math.round(head.getBoundingClientRect().bottom + window.scrollY);
+        if (window.scrollY > top) window.scrollTo({ top, behavior: "auto" });
+      }
+      const again = $("#ai-topic");
+      if (again) again.focus({ preventScroll: true });
+    };
+    sel.addEventListener("change", () => pickAiTopic(sel.value));
+    const cnt = el("span", "ai-count", state.aiTopic ? `${state.aiTopic} · 에피소드 ${items.length}개` : `에피소드 ${items.length}개`);
+    cnt.setAttribute("aria-live", "polite");
+    bar.append(lab, sel, cnt);
+    if (state.aiTopic) {
+      const clr = el("button", "ai-clear", "모든 주제 보기");
+      clr.type = "button";
+      clr.addEventListener("click", () => pickAiTopic(""));
+      bar.append(clr);
+    }
+    box.append(bar);
+    if (state.tab === "ai") syncSticky();
+
     if (!items.length) {
-      box.append(el("p", "empty", "점수를 매긴 에피소드가 없습니다"));
+      box.append(el("p", "empty", state.aiTopic ? "이 주제에는 점수를 매긴 에피소드가 없습니다" : "점수를 매긴 에피소드가 없습니다"));
       return;
     }
     BANDS.forEach((band, i) => {
@@ -732,6 +816,18 @@
   }
 
   // ---------- 탭 ----------
+  let stickyObs = null;
+  function syncSticky() {
+    const bar = state.tab === "ai" ? $("#panel-ai .ai-bar") : $("#bar");
+    const set = () => document.documentElement.style.setProperty("--sticky-h", `${bar ? bar.offsetHeight : 0}px`);
+    set();
+    if (stickyObs) stickyObs.disconnect();
+    stickyObs = null;
+    if (bar && "ResizeObserver" in window) {
+      stickyObs = new ResizeObserver(set);
+      stickyObs.observe(bar);
+    }
+  }
   function setTab(tab, { focus = false, push = true } = {}) {
     if (tab !== "ai") tab = "ledger";
     state.tab = tab;
@@ -757,6 +853,7 @@
         }
       }
     }
+    syncSticky();
     const tabs = document.querySelector(".tabs");
     if (tabs && tabs.getBoundingClientRect().top < 0) {
       window.scrollTo({ top: Math.max(tabs.getBoundingClientRect().top + window.scrollY - 8, 0), behavior: "auto" });
@@ -853,6 +950,11 @@
     sel.value = tp;
     sel.classList.toggle("on", Boolean(tp));
     for (const b of document.querySelectorAll("button.hbar[data-topic]")) b.setAttribute("aria-pressed", String(b.dataset.topic === tp));
+    const now = document.querySelector(".chart-tags .tp-now");
+    if (now) {
+      now.hidden = !tp;
+      now.textContent = tp ? `지금: ${tp}` : "";
+    }
     renderList();
     if (jump) scrollToList();
   }
@@ -938,7 +1040,8 @@
     if (state.tab === "ai") state.aiDone = true; // 주소가 #ai 로 열렸으면 처음부터 그 탭을 그린다
     renderAll(true); // 추천 수를 기다리지 않고 먼저 그린다
     await applyVotes(votesP);
-    renderAll(false);
+    if (state.sort === "rec") renderList(); // 추천 순서가 바뀜
+    repaintAll();
   }
   main();
 })();
